@@ -1,11 +1,10 @@
-pub mod config {
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 #[derive(Debug)]
-struct Config {
+pub struct Config {
     values_ : HashMap<String, HashMap<String,String>>,
 }
 
@@ -69,6 +68,4 @@ pub fn parse_file(file_path: &str) -> Config {
     }
 
     config
-}
-
 }
