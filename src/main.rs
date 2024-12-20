@@ -191,6 +191,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             stream.shutdown().await.unwrap_or_default();// 显式关闭
                             return;
                         }
+                    } else {
+                        let reply = [0x00, 0x00];
+                        if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, Duration::from_secs(5)).await {
+                            eprintln!("write reply error: {}",e);
+                            stream.shutdown().await.unwrap_or_default();// 显式关闭
+                            return;
+                        }
+                        eprintln!("非socks認證");
+                        stream.shutdown().await.unwrap_or_default();// 显式关闭
+                        return;
                     }
 
                     let mut reqbuf = [0; 4];
