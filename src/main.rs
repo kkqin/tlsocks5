@@ -2,13 +2,16 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use tokio::sync::Mutex;
 use tokio_rustls::rustls::{ServerConfig,Certificate, PrivateKey};
-use std::error::Error;
+use std::{error::Error, str::FromStr};
 use std::sync::Arc;
+use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use std::collections::HashMap;
 use tokio::time::Duration;
-mod io_utils;
 use bytes::BytesMut;
+mod io_utils;
+mod config;
+
 
 fn build_socks_request(target_address: &str) -> Option<Vec<u8>> {
     use std::net::ToSocketAddrs;
@@ -44,7 +47,7 @@ async fn handle_username_password_auth(_ste : &mut tokio_rustls::server::TlsStre
 }
 
 /// 加载证书和私钥
-async fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerConfig, Box<dyn Error>> {
+async fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerConfig, io::Error> {
     // 读取 cert.pem 文件
     // 异步读取 cert.pem 文件内容到 Vec<u8>
     let cert_file = tokio::fs::File::open(cert_path).await?;
@@ -70,7 +73,7 @@ async fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerConfig
     let keys = rustls_pemfile::private_key(&mut buf)?;
 
     if keys.is_none() {
-        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, "未找到有效私钥")));
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "未找到有效私钥"));
     }
 
     // 配置 TLS
@@ -88,21 +91,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 建立 TLS 設定
     let tls_config = load_tls_config("cert.pem", "key.pem").await?;
     let acceptor = TlsAcceptor::from(Arc::new(tls_config));
+    let config = config::parse_file("config.ini")?;
 
-    let listener = TcpListener::bind("0.0.0.0:1081").await?;
+    let port = config.get_str("base", "listen_port").unwrap_or("1080".to_string());
+    let connect_ip = match config.get_str("trans", "connect_ip") {
+        Some(ip) => ip,
+        None => {
+            return Err(Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("connect ip error"))) as Box<dyn Error>);
+        }
+    };
+    let connect_port = match config.get_str("trans", "connect_port") {
+        Some(p) => p,
+        None => {
+            return Err(Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("connect port error"))) as Box<dyn Error>);
+        }
+    };
+    let host = "0.0.0.0".to_string() + &":".to_string() + &port;
+    let target_host = connect_ip + &":".to_string() + &connect_port;
+    let listener = TcpListener::bind(&host).await?;
 
-    println!("SOCKS5 伺服器已啟動，監聽 0.0.0.0:1081 (TLS)");
+    println!("SOCKS5 伺服器已啟動，監聽 {host} (TLS)");
+    println!("SOCKS5 伺服器已啟動，目標 {target_host} (TLS)");
 
     // 假设这里是用户认证信息（实际应用中可以从数据库或配置文件中读取）
-    let users = Arc::new(HashMap::from([
+    /*let users = Arc::new(HashMap::from([
         ("user1".to_string(), "password1".to_string()),
         ("user2".to_string(), "password2".to_string()),
-    ]));
+    ]));*/
 
     loop {
         let (stream, _) = listener.accept().await?;
         let acceptor = acceptor.clone();
-        let users = users.clone();
+        //let users = users.clone();
+        let target_host = target_host.clone();
 
         tokio::spawn(async move {
             match acceptor.accept(stream).await {
@@ -146,9 +167,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             stream.shutdown().await.unwrap_or_default();// 显式关闭
                             return;
                         }
-                        let reply = [0x01, 0x00];
+                        let len = buffer[1];
+                        let username = &buffer[2usize..2+len as usize].to_vec();
+                        let username = String::from_utf8(username.to_vec()).unwrap();
+                        let len2 =  buffer[(1+1+len) as usize];
+                        let password = &buffer[(2+len+1) as usize ..(2+len+1+len2) as usize].to_vec();
+                        let password = String::from_utf8(password.to_vec()).unwrap();
+                        //print!("{username}, {password}\n");
+
+                        let mut reply = [0x01, 0x00];
+                        let mut success = true;
+                        if password != "mypassword".to_string() {
+                            reply = [0x00, 0x00];
+                            success = false;
+                        }
                         if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, Duration::from_secs(5)).await {
                             eprintln!("write reply error: {}",e);
+                            stream.shutdown().await.unwrap_or_default();// 显式关闭
+                            return;
+                        }
+                        if !success {
+                            eprintln!("認證失敗: {username}, {password}");
                             stream.shutdown().await.unwrap_or_default();// 显式关闭
                             return;
                         }
@@ -205,7 +244,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return;
                       }
                     };
-                    match TcpStream::connect("192.168.18.115:10808").await {
+                    match TcpStream::connect(&target_host).await {
                         Ok(mut proxy_stream) => {
                             println!("連接到目標代理 SOCKS 服務成功");
 
@@ -243,7 +282,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                Vec::new()
                             });
 
-                            if let Err(e) = io_utils::write_all_timeout(&mut proxy_stream, &target_request, Duration::from_secs(5)).await {
+                            if let Err(e) = io_utils::write_all_timeout(&mut proxy_stream, &target_request, Duration::from_secs(20)).await {
                                 eprintln!("發送目標位址請求失敗: {}", e);
                                 proxy_stream.shutdown().await.unwrap_or_default();
                                 stream.shutdown().await.unwrap_or_default();// 显式关闭
@@ -252,7 +291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // 4. 接收代理响应的目标连接状态
                             let mut request_response = [0u8; 10];
-                            if let Err(e) = io_utils::read_exact_timeout(&mut proxy_stream, &mut request_response, Duration::from_secs(5)).await {
+                            if let Err(e) = io_utils::read_exact_timeout(&mut proxy_stream, &mut request_response, Duration::from_secs(20)).await {
                                 eprintln!("讀取代理回應失敗: {}", e);
                                 proxy_stream.shutdown().await.unwrap_or_default();
                                 stream.shutdown().await.unwrap_or_default();// 显式关闭
@@ -285,13 +324,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             let proxy_writer_clone1 = Arc::clone(&proxy_writer);
                             tokio::spawn(async move {
-                                let _ = io_utils::handle_copy2(client_reader, proxy_writer_clone1, "客户端 -> 代理", Duration::from_secs(300)).await;
+                                let _ = io_utils::handle_copy2(client_reader, proxy_writer_clone1, "客户端 -> 代理", Duration::from_secs(10)).await;
                             });
 
                             let client_writer = Arc::new(Mutex::new(client_writer));
                             let client_writer_clone = Arc::clone(&client_writer);
                             tokio::spawn(async move {
-                                let _ = io_utils::handle_copy2(proxy_reader, client_writer_clone, "代理 -> 客户端", Duration::from_secs(300)).await;
+                                let _ = io_utils::handle_copy2(proxy_reader, client_writer_clone, "代理 -> 客户端", Duration::from_secs(10)).await;
                             });
                         }
                         Err(e) => {

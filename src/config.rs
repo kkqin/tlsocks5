@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::io;
 
 #[derive(Debug)]
 pub struct Config {
@@ -19,33 +20,40 @@ impl Config {
         self.values_.get(section).and_then(|v| v.get(key).map(|v| v.as_str()))
     }
 
-    fn has_section(&self, section: &str) -> bool {
+    pub fn has_section(&self, section: &str) -> bool {
         self.values_.contains_key(section)
     }
 
-    fn get_int(&self, section: &str, key: &str) -> Option<i32> {
+    pub fn get_int(&self, section: &str, key: &str) -> Option<i32> {
         self.get(section, key).and_then(|v| v.parse().ok())
     }
 
-    fn get_str(&self, section: &str, key: &str) -> Option<String> {
+    pub fn get_str(&self, section: &str, key: &str) -> Option<String> {
         self.get(section, key).map(|v| v.to_string())
     }
 
-    fn get_bool(&self, section: &str, key: &str) -> Option<bool> {
+    pub fn get_bool(&self, section: &str, key: &str) -> Option<bool> {
         self.get(section, key).and_then(|v| v.parse().ok())
     }
 
 }
 
-pub fn parse_file(file_path: &str) -> Config {
+pub fn parse_file(file_path: &str) -> Result<Config, io::Error> {
     let path = Path::new(file_path);
-    let file = File::open(path).expect("無法打開配置文件");
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                    format!("文件：{file_path}:{e}"),
+            ))
+        }
+    };
     let reader = BufReader::new(file);
     let mut config = Config::new();
     let mut current_section = String::new();
 
     for line in reader.lines() {
-        let line = line.expect("讀取配置文件時出現錯誤");
+        let line = line?;
         let line = line.trim();
 
         if line.is_empty() || line.starts_with('#') {
@@ -58,14 +66,30 @@ pub fn parse_file(file_path: &str) -> Config {
         }
 
         let mut parts = line.splitn(2, '=');
-        let key = parts.next().expect("配置文件格式錯誤").trim();
-        let value = parts.next().expect("配置文件格式錯誤").trim();
+        let key = match parts.next() {
+            Some(k) => k.trim(),
+            None => {
+                eprintln!("配置文件格式錯誤：缺少 key");
+                return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                    format!("配置格式错误：key"),
+                ))
+            }
+        };
+
+        let value = match parts.next() {
+            Some(k) => k.trim(),
+            None => {
+                eprintln!("配置文件格式錯誤：缺少 value");
+                return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                    format!("配置格式错误：value"),
+                ))
+            }
+        };
 
         config.values_
             .entry(current_section.clone())
             .or_insert_with(HashMap::new)
             .insert(key.to_string(), value.to_string());
     }
-
-    config
+    Ok(config)
 }
