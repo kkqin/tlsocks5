@@ -326,21 +326,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
 
                             // 6. 建立双向数据转发
-                            //let (stream, _) = stream.into_inner();
                             let (client_reader, client_writer) = tokio::io::split(stream);
                             let (proxy_reader, proxy_writer) = tokio::io::split(proxy_stream);
 
                             let proxy_writer = Arc::new(Mutex::new(proxy_writer));
-
-                            let proxy_writer_clone1 = Arc::clone(&proxy_writer);
-                            tokio::spawn(async move {
-                                let _ = io_utils::handle_copy2(client_reader, proxy_writer_clone1, "客户端 -> 代理", Duration::from_secs(10)).await;
+                            tokio::spawn({
+                                let proxy_writer = Arc::clone(&proxy_writer);
+                                async move {
+                                    let _ = io_utils::handle_copy2(client_reader, proxy_writer, "客户端 -> 代理", Duration::from_secs(10)).await;
+                                }
                             });
 
                             let client_writer = Arc::new(Mutex::new(client_writer));
-                            let client_writer_clone = Arc::clone(&client_writer);
-                            tokio::spawn(async move {
-                                let _ = io_utils::handle_copy2(proxy_reader, client_writer_clone, "代理 -> 客户端", Duration::from_secs(10)).await;
+                            tokio::spawn({
+                                let client_writer = Arc::clone(&client_writer);
+                                async move {
+                                    let _ = io_utils::handle_copy2(proxy_reader, client_writer, "代理 -> 客户端", Duration::from_secs(10)).await;
+                                }
                             });
                         }
                         Err(e) => {
