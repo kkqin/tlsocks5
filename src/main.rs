@@ -2,13 +2,14 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use tokio::sync::Mutex;
 use tokio_rustls::rustls::{ServerConfig,Certificate, PrivateKey};
-use std::{error::Error, str::FromStr};
+use std::error::Error;
 use std::sync::Arc;
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use std::collections::HashMap;
 use tokio::time::Duration;
 use bytes::BytesMut;
+use std::net::Ipv6Addr;
 mod io_utils;
 mod config;
 
@@ -244,7 +245,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let mut portbuf = [0u8;2];
                         io_utils::read_exact_timeout(&mut stream, &mut portbuf, Duration::from_secs(5)).await.unwrap();
                         let port = u16::from_be_bytes(portbuf);
-                        format!("[{}]:{}", std::str::from_utf8(&addr).unwrap(),port)
+                        // Convert the addr array to an Ipv6Addr
+                        let ip_address = Ipv6Addr::from(addr);
+                        format!("[{}]:{}", ip_address,port)
                       },
                       _ => {
                         eprintln!("atyp error!");

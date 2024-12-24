@@ -11,7 +11,14 @@ pub async fn read_buf_timeout<R: AsyncRead + Unpin>(
     timeout_duration: Duration,
 ) -> Result<usize, std::io::Error> {
     match timeout(timeout_duration, stream.read_buf(buf)).await {
-        Ok(result) => result, // 直接回傳內部 Result<usize>
+        Ok(result) => {
+            let bytes_read = result?;
+            if bytes_read == 0 {
+                // 如果没有读取到字节，返回自定义错误
+                return Err(std::io::Error::new(ErrorKind::UnexpectedEof, "读取到0字节"));
+            }
+            Ok(bytes_read)
+        }, // 直接回傳內部 Result<usize>
         Err(_) => Err(std::io::Error::new(ErrorKind::TimedOut, "讀取超時")),
     }
 }
