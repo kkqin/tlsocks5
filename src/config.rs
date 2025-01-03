@@ -36,6 +36,10 @@ impl Config {
         self.get(section, key).and_then(|v| v.parse().ok())
     }
 
+    pub fn get_str_list(&self, section: &str, key: &str) -> Option<Vec<String>> {
+        self.get(section, key).map(|v| v.split(',').map(|v| v.trim().to_string()).collect())
+    }
+
 }
 
 pub fn parse_file(file_path: &str) -> Result<Config, io::Error> {

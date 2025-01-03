@@ -6,10 +6,10 @@ use std::error::Error;
 use std::sync::Arc;
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use std::collections::HashMap;
 use tokio::time::Duration;
 use bytes::BytesMut;
 use std::net::Ipv6Addr;
+use rand::seq::SliceRandom;
 mod io_utils;
 mod config;
 
@@ -41,10 +41,6 @@ fn build_socks_request(target_address: &str) -> Option<Vec<u8>> {
     }
 
     None
-}
-
-async fn handle_username_password_auth(_ste : &mut tokio_rustls::server::TlsStream<TcpStream>, _map : &HashMap<String, String>) -> Result<(), Box<dyn Error>> {
-    Ok(())
 }
 
 /// 加载证书和私钥
@@ -95,18 +91,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = config::parse_file("config.ini")?;
 
     let port = config.get_str("base", "listen_port").unwrap_or("1080".to_string());
-    let connect_ip = match config.get_str("trans", "connect_ip") {
-        Some(ip) => ip,
-        None => {
-            return Err(Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("connect ip error"))) as Box<dyn Error>);
-        }
-    };
-    let connect_port = match config.get_str("trans", "connect_port") {
-        Some(p) => p,
-        None => {
-            return Err(Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("connect port error"))) as Box<dyn Error>);
-        }
-    };
     let timeout = match config.get_int("base", "time_out") {
         Some(t) => t,
         None => {
@@ -115,23 +99,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let timeout = Duration::from_secs(timeout as u64);
     let host = "0.0.0.0".to_string() + &":".to_string() + &port;
-    let target_host = connect_ip + &":".to_string() + &connect_port;
+    let connect_ips: Vec<String> = config
+        .get_str_list("trans", "connect_ips") // 从配置文件中读取多个IP
+        .unwrap_or_default();
+    let connect_ports = config.get_str_list("trans", "connect_ports").unwrap_or_default();
+    let target_hosts: Vec<String> = connect_ips
+        .iter()
+        .zip(connect_ports.iter())
+        .map(|(ip, port)| format!("{}:{}", ip, port))
+        .collect();
+
+    let auth_passwords = config.get_str_list("auth", "auth_passwords").unwrap_or_default();
+
     let listener = TcpListener::bind(&host).await?;
 
     println!("SOCKS5 伺服器已啟動，監聽 {host} (TLS)");
-    println!("SOCKS5 伺服器已啟動，目標 {target_host} (TLS)");
-
-    // 假设这里是用户认证信息（实际应用中可以从数据库或配置文件中读取）
-    /*let users = Arc::new(HashMap::from([
-        ("user1".to_string(), "password1".to_string()),
-        ("user2".to_string(), "password2".to_string()),
-    ]));*/
+    println!("SOCKS5 伺服器已啟動，目標 {:?}", target_hosts);
+    println!("SOCKS5 伺服器已啟動，認證密碼 {:?}", auth_passwords);
 
     loop {
         let (stream, _) = listener.accept().await?;
         let acceptor = acceptor.clone();
-        //let users = users.clone();
-        let target_host = target_host.clone();
+        let auth_passwords = auth_passwords.clone();
+        let target_hosts = target_hosts.clone();
 
         tokio::spawn(async move {
             match acceptor.accept(stream).await {
@@ -140,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let mut buf = [0; 2];
                     if let Err(_) = io_utils::read_exact_timeout(&mut stream, &mut buf, timeout).await {
-                      stream.shutdown().await.unwrap_or_default();// 显式关闭
+                      stream.shutdown().await.unwrap_or_default();
                       return;
                     }
 
@@ -149,13 +139,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Some(v) => *v,
                         None => {
                             eprintln!("讀取版本失敗");
-                            stream.shutdown().await.unwrap_or_default();// 显式关闭
+                            stream.shutdown().await.unwrap_or_default();
                             return;
                         }
                     };
                     if v != 0x05 {
                       eprintln!("is not socks5: {}, now shutdwon", buf[0]);
-                      stream.shutdown().await.unwrap_or_default();// 显式关闭
+                      stream.shutdown().await.unwrap_or_default();
                       return;
                     }
 
@@ -163,7 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let l =  buf[1];
                     let mut methodbuf = vec![0u8;l as usize];
                     if let Err(_) = io_utils::read_exact_timeout(&mut stream, &mut methodbuf, timeout).await {
-                      stream.shutdown().await.unwrap_or_default();// 显式关闭
+                      stream.shutdown().await.unwrap_or_default();
                       return;
                     }
 
@@ -176,7 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, timeout).await {
                         eprintln!("write reply error: {}", e);
-                        stream.shutdown().await.unwrap_or_default();// 显式关闭
+                        stream.shutdown().await.unwrap_or_default();
                         return;
                     }
 
@@ -184,14 +174,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if reply[1] == 0x02 {
                         let mut buffer = BytesMut::with_capacity(1024);
                         if let Err(_) = io_utils::read_buf_timeout(&mut stream, &mut buffer, timeout).await {
-                            stream.shutdown().await.unwrap_or_default();// 显式关闭
+                            stream.shutdown().await.unwrap_or_default();
                             return;
                         }
                         let len = match buffer.get(1) {
                             Some(len) => *len,
                             None => {
                                 eprintln!("讀取長度失敗");
-                                stream.shutdown().await.unwrap_or_default();// 显式关闭
+                                stream.shutdown().await.unwrap_or_default();
                                 return;
                             }
                         };
@@ -204,42 +194,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let mut reply = [0x01, 0x00];
                         let mut success = true;
-                        if password != "mypassword".to_string() {
-                            reply = [0x00, 0x00];
+
+                        // 检查密码
+                        if !auth_passwords.contains(&password) {
+                            reply = [0x01, 0x01];
                             success = false;
                         }
                         if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, timeout).await {
                             eprintln!("write reply error: {}",e);
-                            stream.shutdown().await.unwrap_or_default();// 显式关闭
+                            stream.shutdown().await.unwrap_or_default();
                             return;
                         }
                         if !success {
                             eprintln!("認證失敗: {username}, {password}");
-                            stream.shutdown().await.unwrap_or_default();// 显式关闭
+                            stream.shutdown().await.unwrap_or_default();
                             return;
                         }
                     } else {
                         let reply = [0x00, 0x00];
                         if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, timeout).await {
                             eprintln!("write reply error: {}",e);
-                            stream.shutdown().await.unwrap_or_default();// 显式关闭
+                            stream.shutdown().await.unwrap_or_default();
                             return;
                         }
                         eprintln!("非socks認證");
-                        stream.shutdown().await.unwrap_or_default();// 显式关闭
+                        stream.shutdown().await.unwrap_or_default();
                         return;
                     }
 
                     let mut reqbuf = [0; 4];
                     if let Err(_) = io_utils::read_exact_timeout(&mut stream, &mut reqbuf, timeout).await {
                       eprintln!("error read");
-                      stream.shutdown().await.unwrap_or_default();// 显式关闭
+                      stream.shutdown().await.unwrap_or_default();
                       return;
                     }
 
                     if reqbuf[0] != 0x05 {
                       eprintln!("not socks5 protocol!");
-                      stream.shutdown().await.unwrap_or_default();// 显式关闭
+                      stream.shutdown().await.unwrap_or_default();
                       return;
                     }
                     let _cmd = reqbuf[1];
@@ -277,13 +269,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       },
                       _ => {
                         eprintln!("atyp error!");
-                        if let Err(e) = stream.shutdown().await { // 显式关闭
+                        if let Err(e) = stream.shutdown().await {
                             eprintln!("shutdown error: {}", e); // 处理 shutdown 错误
                         }
                         return;
                       }
                     };
-                    match TcpStream::connect(&target_host).await {
+
+                    let target_host = match target_hosts.choose(&mut rand::thread_rng()) {
+                        Some(host) => host,
+                        None => {
+                            eprintln!("未找到目標主機");
+                            let _ = stream.shutdown();
+                            return;
+                        }
+                    };
+
+                    match TcpStream::connect(target_host).await {
                         Ok(mut proxy_stream) => {
                             println!("連接到目標代理 SOCKS 服務成功");
 
@@ -291,8 +293,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let handshake = [0x05, 0x01, 0x00]; // SOCKS5 + 支持的认证方法 (无认证)
                             if let Err(e) = io_utils::write_all_timeout(&mut proxy_stream, &handshake, timeout).await {
                                 eprintln!("發送代理握手失敗: {}", e);
-                                proxy_stream.shutdown().await.unwrap_or_default();// 显式关闭
-                                stream.shutdown().await.unwrap_or_default();// 显式关闭
+                                proxy_stream.shutdown().await.unwrap_or_default();
+                                stream.shutdown().await.unwrap_or_default();
                                 return;
                             }
 
@@ -301,13 +303,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Err(e) = io_utils::read_exact_timeout(&mut proxy_stream, &mut response, timeout).await {
                                 eprintln!("讀取代理握手回應失敗: {}", e);
                                 proxy_stream.shutdown().await.unwrap_or_default();
-                                stream.shutdown().await.unwrap_or_default();// 显式关闭
+                                stream.shutdown().await.unwrap_or_default();
                                 return;
                             }
                             if response[0] != 0x05 || response[1] != 0x00 {
                                 eprintln!("代理握手失敗: {:?}", response);
                                 proxy_stream.shutdown().await.unwrap_or_default();
-                                stream.shutdown().await.unwrap_or_default();// 显式关闭
+                                stream.shutdown().await.unwrap_or_default();
                                 return;
                             }
 
@@ -316,7 +318,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // 3. 构建 SOCKS 请求，发送目标地址到代理
                             let target_request = build_socks_request(&target_address).unwrap_or_else(|| {
                                eprintln!("構建 SOCKS 請求失敗");
-                               let _ = stream.shutdown();// 显式关闭
+                               let _ = stream.shutdown();
                                let _ = proxy_stream.shutdown();
                                Vec::new()
                             });
@@ -324,7 +326,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Err(e) = io_utils::write_all_timeout(&mut proxy_stream, &target_request, Duration::from_secs(20)).await {
                                 eprintln!("發送目標位址請求失敗: {}", e);
                                 proxy_stream.shutdown().await.unwrap_or_default();
-                                stream.shutdown().await.unwrap_or_default();// 显式关闭
+                                stream.shutdown().await.unwrap_or_default();
                                 return;
                             }
 
@@ -333,13 +335,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Err(e) = io_utils::read_exact_timeout(&mut proxy_stream, &mut request_response, Duration::from_secs(20)).await {
                                 eprintln!("讀取代理回應失敗: {}", e);
                                 proxy_stream.shutdown().await.unwrap_or_default();
-                                stream.shutdown().await.unwrap_or_default();// 显式关闭
+                                stream.shutdown().await.unwrap_or_default();
                                 return;
                             }
                             if request_response[1] != 0x00 {
                                 eprintln!("代理連線目標失敗，錯誤代碼: {}", request_response[1]);
                                 proxy_stream.shutdown().await.unwrap_or_default();
-                                stream.shutdown().await.unwrap_or_default();// 显式关闭
+                                stream.shutdown().await.unwrap_or_default();
                                 return;
                             }
 
@@ -349,7 +351,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let reply = [0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
                             if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, Duration::from_secs(5)).await {
                                 eprintln!("回覆用戶端 SOCKS 請求失敗: {}", e);
-                                stream.shutdown().await.unwrap_or_default();// 显式关闭
+                                stream.shutdown().await.unwrap_or_default();
                                 proxy_stream.shutdown().await.unwrap_or_default();
                                 return;
                             }
