@@ -9,10 +9,21 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
 use bytes::BytesMut;
 use std::net::Ipv6Addr;
-use rand::seq::SliceRandom;
+use once_cell::sync::Lazy;
 mod io_utils;
 mod config;
 
+static COUNTER: Lazy<Mutex<u32>> = Lazy::new(|| Mutex::new(0));
+async fn get_next_target(v :&Vec<String>) -> &String {
+    {
+        let mut counter = COUNTER.lock().await;
+        *counter += 1;
+    }
+    let c = *COUNTER.lock().await % (v.len() as u32);
+    println!("Counter: {}", *COUNTER.lock().await);
+    let target_host = v.get(c as usize).unwrap();
+    target_host
+}
 
 fn build_socks_request(target_address: &str) -> Option<Vec<u8>> {
     use std::net::ToSocketAddrs;
@@ -186,10 +197,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         };
                         let username = &buffer[2usize..2+len as usize].to_vec();
-                        let username = String::from_utf8(username.to_vec()).unwrap();
+                        let username = match String::from_utf8(username.to_vec()) {
+                            Ok(username) => username,
+                            Err(_) => String::from("使用 unwrap_or_else 的預設字串"),
+                        };
                         let len2 =  buffer[(1+1+len) as usize];
                         let password = &buffer[(2+len+1) as usize ..(2+len+1+len2) as usize].to_vec();
-                        let password = String::from_utf8(password.to_vec()).unwrap();
+                        let password = match String::from_utf8(password.to_vec()) {
+                            Ok(password) => password,
+                            Err(_) => String::from("badpassword"),
+                        };
                         //print!("{username}, {password}\n");
 
                         let mut reply = [0x01, 0x00];
@@ -276,14 +293,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       }
                     };
 
-                    let target_host = match target_hosts.choose(&mut rand::thread_rng()) {
+                    /*let target_host = match target_hosts.choose(&mut rand::thread_rng()) {
                         Some(host) => host,
                         None => {
                             eprintln!("未找到目標主機");
                             let _ = stream.shutdown();
                             return;
                         }
-                    };
+                    };*/
+
+                    let target_host = get_next_target(&target_hosts).await;
 
                     match TcpStream::connect(target_host).await {
                         Ok(mut proxy_stream) => {
