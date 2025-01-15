@@ -9,20 +9,38 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
 use bytes::BytesMut;
 use std::net::Ipv6Addr;
-use once_cell::sync::Lazy;
+use ping::ping;
+use rand::seq::SliceRandom;
+use tokio::time::sleep;
 mod io_utils;
 mod config;
 
-static COUNTER: Lazy<Mutex<u32>> = Lazy::new(|| Mutex::new(0));
-async fn get_next_target(v :&Vec<String>) -> &String {
-    {
-        let mut counter = COUNTER.lock().await;
-        *counter += 1;
+async fn check_connection(address: &str) -> bool {
+    match TcpStream::connect(address).await {
+        Ok(_) => true,  // 连接成功
+        Err(_) => false, // 连接失败
     }
-    let c = *COUNTER.lock().await % (v.len() as u32);
-    println!("Counter: {}", *COUNTER.lock().await);
-    let target_host = v.get(c as usize).unwrap();
-    target_host
+}
+
+async fn update_ip_list(ip_port_list: Arc<Mutex<Vec<String>>>, all_ip_ports: Vec<String>) {
+    loop {
+        let mut updated_ips = vec![];
+
+        for ip in &all_ip_ports {
+            if check_connection(ip).await {
+                updated_ips.push(ip.clone());
+            }
+        }
+
+        {
+            // 更新共享的 IP 列表
+            let mut ip_list_lock = ip_port_list.lock().await;
+            *ip_list_lock = updated_ips;
+        }
+
+        // 等待 15 分钟
+        sleep(Duration::from_secs(15 * 60)).await;
+    }
 }
 
 fn build_socks_request(target_address: &str) -> Option<Vec<u8>> {
@@ -120,19 +138,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|(ip, port)| format!("{}:{}", ip, port))
         .collect();
 
+    let ip_list = Arc::new(Mutex::new(target_hosts.clone()));
+    let ip_list_clone = ip_list.clone();
+    tokio::spawn(async move {
+        update_ip_list(ip_list_clone, target_hosts).await;
+    });
+
     let auth_passwords = config.get_str_list("auth", "auth_passwords").unwrap_or_default();
 
     let listener = TcpListener::bind(&host).await?;
 
     println!("SOCKS5 伺服器已啟動，監聽 {host} (TLS)");
-    println!("SOCKS5 伺服器已啟動，目標 {:?}", target_hosts);
+    println!("SOCKS5 伺服器已啟動，目標 {:?}", ip_list);
     println!("SOCKS5 伺服器已啟動，認證密碼 {:?}", auth_passwords);
 
     loop {
         let (stream, _) = listener.accept().await?;
         let acceptor = acceptor.clone();
         let auth_passwords = auth_passwords.clone();
-        let target_hosts = target_hosts.clone();
+        let ip_list = ip_list.clone();
 
         tokio::spawn(async move {
             match acceptor.accept(stream).await {
@@ -293,16 +317,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       }
                     };
 
-                    /*let target_host = match target_hosts.choose(&mut rand::thread_rng()) {
+                    let ip_list_lock = ip_list.lock().await;
+                    let target_host = match ip_list_lock.choose(&mut rand::thread_rng()) {
                         Some(host) => host,
                         None => {
                             eprintln!("未找到目標主機");
                             let _ = stream.shutdown();
                             return;
                         }
-                    };*/
-
-                    let target_host = get_next_target(&target_hosts).await;
+                    };
 
                     match TcpStream::connect(target_host).await {
                         Ok(mut proxy_stream) => {
