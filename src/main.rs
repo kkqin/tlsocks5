@@ -9,7 +9,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
 use bytes::BytesMut;
 use std::net::Ipv6Addr;
-use ping::ping;
 use rand::seq::SliceRandom;
 use tokio::time::sleep;
 mod io_utils;
