@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
-use bytes::{BytesMut, BufMut};
+use bytes::{BufMut, BytesMut};
 use std::net::Ipv6Addr;
 use rand::seq::SliceRandom;
 use rand::rngs::StdRng;
