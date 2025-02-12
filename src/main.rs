@@ -10,9 +10,12 @@ use tokio::time::Duration;
 use bytes::{BytesMut, BufMut};
 use std::net::Ipv6Addr;
 use rand::seq::SliceRandom;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use tokio::time::sleep;
 mod io_utils;
 mod config;
+mod buffer_pool;
 
 async fn check_connection(address: &str) -> bool {
     match TcpStream::connect(address).await {
@@ -315,8 +318,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                       }
                     };
 
+                    let mut rng = StdRng::from_entropy();
                     let ip_list_lock = ip_list.lock().await;
-                    let target_host = match ip_list_lock.choose(&mut rand::thread_rng()) {
+                    let target_host = match ip_list_lock.choose(&mut rng) {
                         Some(host) => host,
                         None => {
                             eprintln!("未找到目標主機");
@@ -356,12 +360,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("代理握手成功");
 
                             // 3. 构建 SOCKS 请求，发送目标地址到代理
-                            let target_request = build_socks_request(&target_address).unwrap_or_else(|| {
-                               eprintln!("構建 SOCKS 請求失敗");
-                               let _ = stream.shutdown();
-                               let _ = proxy_stream.shutdown();
-                               BytesMut::new()
-                            });
+                            let target_request = match build_socks_request(&target_address){
+                                None => {
+                                    eprintln!("構建 SOCKS 請求失敗");
+                                    let _ = stream.shutdown();
+                                    let _ = proxy_stream.shutdown();
+                                    return
+                                },
+                                Some(request) => request
+                            };
 
                             if let Err(e) = io_utils::write_all_timeout(&mut proxy_stream, &target_request, Duration::from_secs(20)).await {
                                 eprintln!("發送目標位址請求失敗: {}", e);
