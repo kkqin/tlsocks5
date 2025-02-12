@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
-use bytes::BytesMut;
+use bytes::{BytesMut, BufMut};
 use std::net::Ipv6Addr;
 use rand::seq::SliceRandom;
 use tokio::time::sleep;
@@ -42,28 +42,28 @@ async fn update_ip_list(ip_port_list: Arc<Mutex<Vec<String>>>, all_ip_ports: Vec
     }
 }
 
-fn build_socks_request(target_address: &str) -> Option<Vec<u8>> {
+fn build_socks_request(target_address: &str) -> Option<BytesMut> {
     use std::net::ToSocketAddrs;
 
-    let mut buffer = Vec::new();
+    let mut buffer = BytesMut::with_capacity(22); // Use BytesMut for buffer management
 
-    buffer.push(0x05); // SOCKS5
-    buffer.push(0x01); // CONNECT 请求
-    buffer.push(0x00); // 保留字段
+    buffer.put_u8(0x05); // SOCKS5
+    buffer.put_u8(0x01); // CONNECT 请求
+    buffer.put_u8(0x00); // 保留字段
 
     if let Ok(mut addrs) = target_address.to_socket_addrs() {
         if let Some(addr) = addrs.next() {
             match addr {
                 std::net::SocketAddr::V4(v4) => {
-                    buffer.push(0x01); // IPv4 地址类型
-                    buffer.extend_from_slice(&v4.ip().octets());
+                    buffer.put_u8(0x01); // IPv4 地址类型
+                    buffer.put_slice(&v4.ip().octets());
                 }
                 std::net::SocketAddr::V6(v6) => {
-                    buffer.push(0x04); // IPv6 地址类型
-                    buffer.extend_from_slice(&v6.ip().octets());
+                    buffer.put_u8(0x04); // IPv6 地址类型
+                    buffer.put_slice(&v6.ip().octets());
                 }
             }
-            buffer.extend_from_slice(&addr.port().to_be_bytes());
+            buffer.put_u16(addr.port());
             return Some(buffer);
         }
     }
@@ -74,27 +74,26 @@ fn build_socks_request(target_address: &str) -> Option<Vec<u8>> {
 /// 加载证书和私钥
 async fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerConfig, io::Error> {
     // 读取 cert.pem 文件
-    // 异步读取 cert.pem 文件内容到 Vec<u8>
     let cert_file = tokio::fs::File::open(cert_path).await?;
-    let mut cert_reader =  BufReader::new(cert_file);
-    let mut buf : Vec<u8> = Vec::new();
-    cert_reader.read_to_end(&mut buf).await?;
-    let mut buf = buf.as_slice();
+    let mut cert_reader = BufReader::new(cert_file);
+    let mut buf = BytesMut::with_capacity(4096); // Use BytesMut for buffer management
+    cert_reader.read_buf(&mut buf).await?;
+    let mut buf = buf.as_ref();
 
     // 使用 BufReader 解析 PEM 数据
     let certs = rustls_pemfile::certs(&mut buf)
         .into_iter()
-        .map(|item|{
+        .map(|item| {
             item.map(|i| Certificate(i.to_vec()))
         })
-        .collect::<Result<Vec<Certificate>, _ >>()?;
+        .collect::<Result<Vec<Certificate>, _>>()?;
 
     // 读取 key.pem 文件
     let key_file = tokio::fs::File::open(key_path).await?;
     let mut key_reader = BufReader::new(key_file);
-    let mut buf : Vec<u8> = Vec::new();
-    key_reader.read_to_end(&mut buf).await?;
-    let mut buf = buf.as_slice();
+    let mut buf = BytesMut::with_capacity(4096); // Use BytesMut for buffer management
+    key_reader.read_buf(&mut buf).await?;
+    let mut buf = buf.as_ref();
     let keys = rustls_pemfile::private_key(&mut buf)?;
 
     if keys.is_none() {
@@ -361,7 +360,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                eprintln!("構建 SOCKS 請求失敗");
                                let _ = stream.shutdown();
                                let _ = proxy_stream.shutdown();
-                               Vec::new()
+                               BytesMut::new()
                             });
 
                             if let Err(e) = io_utils::write_all_timeout(&mut proxy_stream, &target_request, Duration::from_secs(20)).await {
