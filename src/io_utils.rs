@@ -127,3 +127,69 @@ where
     }
     Ok(())
 }
+
+pub async fn handle_copy3<R, W>(
+    mut reader: R,
+    writer: Arc<Mutex<W>>,
+    direction: &str,
+    timeout_duration: Duration
+) -> Result<(), tokio::io::Error>
+where
+    R: AsyncReadExt + Unpin,
+    W: AsyncWriteExt + Unpin,
+{
+    // 在整个函数里持有 writer_guard，这样 shutdown() 调用时不会被其他任务抢走
+    let mut writer_guard = writer.lock().await;
+    let mut buffer = vec![0; 8 * 1024]; // 8KB 缓冲区
+
+    loop {
+        // 带超时的读取
+        let read_future = reader.read(&mut buffer);
+        let read_result = timeout(timeout_duration, read_future).await;
+
+        let n = match read_result {
+            Ok(Ok(0)) => {
+                // EOF：对写端半关闭，让对端马上收到 FIN
+                let _ = writer_guard.shutdown().await;
+                break;
+            }
+            Ok(Ok(n)) => n,
+
+            Ok(Err(e)) => {
+                eprintln!("{}：读取错误：{}", direction, e);
+                let _ = writer_guard.shutdown().await;
+                return Err(e);
+            }
+
+            Err(_) => {
+                eprintln!("{}：读取超时", direction);
+                let _ = writer_guard.shutdown().await;
+                return Err(std::io::Error::new(ErrorKind::TimedOut, "读取超时"));
+            }
+        };
+
+        // 带超时的写入
+        let write_future = writer_guard.write_all(&buffer[..n]);
+        let write_result = timeout(timeout_duration, write_future).await;
+        match write_result {
+            Ok(Ok(_)) => {
+                // 写入成功，继续循环
+            }
+
+            Ok(Err(e)) => {
+                eprintln!("{}：写入错误：{}", direction, e);
+                let _ = writer_guard.shutdown().await;
+                return Err(e);
+            }
+
+            Err(_) => {
+                eprintln!("{}：写入超时", direction);
+                let _ = writer_guard.shutdown().await;
+                return Err(std::io::Error::new(ErrorKind::TimedOut, "写入超时"));
+            }
+        }
+    }
+
+    // 循环因 EOF 跳出，返回 Ok
+    Ok(())
+}

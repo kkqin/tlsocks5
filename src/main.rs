@@ -411,7 +411,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             tokio::spawn({
                                 let proxy_writer = Arc::clone(&proxy_writer);
                                 async move {
-                                    let _ = io_utils::handle_copy2(client_reader, proxy_writer, "客户端 -> 代理", Duration::from_secs(10)).await;
+                                    let _ = io_utils::handle_copy3(client_reader, proxy_writer, "客户端 -> 代理", timeout).await;
                                 }
                             });
 
@@ -419,7 +419,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             tokio::spawn({
                                 let client_writer = Arc::clone(&client_writer);
                                 async move {
-                                    let _ = io_utils::handle_copy2(proxy_reader, client_writer, "代理 -> 客户端", Duration::from_secs(10)).await;
+                                    let _ = io_utils::handle_copy3(proxy_reader, client_writer, "代理 -> 客户端", timeout).await;
                                 }
                             });
                         }
