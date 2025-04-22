@@ -1,16 +1,16 @@
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tokio::time::Duration;
-use mimallocator::Mimalloc;
+//use mimallocator::Mimalloc;
 use std::sync::Arc;
 mod config;
 
-#[global_allocator]
-static GLOBAL: Mimalloc = Mimalloc;
+//#[global_allocator]
+//static GLOBAL: Mimalloc = Mimalloc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    console_subscriber::init();
+    //console_subscriber::init();
     // 建立 TLS 設定
     let tls_config = match config::load_tls_config("cert.pem", "key.pem").await {
         Ok(t) => t,
@@ -49,8 +49,8 @@ async fn main() -> anyhow::Result<()> {
         .collect();
 
     let ip_list = target_hosts.clone();
-    let ip_list_clone = ip_list.clone();
-    /*tokio::spawn(async move {
+    /*let ip_list_clone = ip_list.clone();
+    tokio::spawn(async move {
         update_ip_list(ip_list_clone, target_hosts).await;
     });*/
 
@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
     println!("SOCKS5 伺服器已啟動，目標 {:?}", ip_list);
     println!("SOCKS5 伺服器已啟動，認證密碼 {:?}", auth_passwords);
 
-    let sem = Arc::new(tokio::sync::Semaphore::new(30)); // 最多同时处理100个连接
+    let sem = Arc::new(tokio::sync::Semaphore::new(500)); // 最多同时处理100个连接
 
     loop {
         let (stream, _) = listener.accept().await?;

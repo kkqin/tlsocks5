@@ -1,6 +1,8 @@
 use std::{collections::VecDeque, sync::Arc};
 use bytes::BytesMut;
 use tokio::sync::Mutex;
+use std::sync::LazyLock;
+
 
 #[derive(Clone)]
 pub struct BufferPool {
@@ -41,3 +43,5 @@ impl BufferPool {
         }
     }
 }
+
+pub static POOL: LazyLock<crate::buffer_pool::BufferPool> = LazyLock::new(|| crate::buffer_pool::BufferPool::new(8 * 1024, 1000));

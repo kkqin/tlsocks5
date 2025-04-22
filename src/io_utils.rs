@@ -5,27 +5,7 @@ use std::io::ErrorKind;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use once_cell::sync::Lazy;
-
-/// 全局单例 pool
-static BUF_POOL: Lazy<Mutex<Vec<BytesMut>>> = Lazy::new(|| Mutex::new(Vec::new()));
-
-/// 获取一个 buffer
-async fn get_buf() -> BytesMut {
-    let mut pool = BUF_POOL.lock().await;
-    pool.pop().unwrap_or_else(|| BytesMut::with_capacity(8 * 1024))
-}
-
-/// 用完后归还
-async fn return_buf(mut buf: BytesMut) {
-    buf.clear(); // 保留 capacity
-    let mut pool = BUF_POOL.lock().await;
-    if pool.len() < 1000 {
-        pool.push(buf);
-    } else {
-        pool.shrink_to_fit();
-    }
-}
+use crate::buffer_pool::POOL;
 
 pub async fn read_buf_timeout<R: AsyncRead + Unpin>(
     stream: &mut R,
@@ -154,66 +134,49 @@ pub async fn handle_copy3<R, W>(
     mut reader: R,
     writer: Arc<Mutex<W>>,
     direction: &str,
-    timeout_duration: Duration
+    timeout_duration: Duration,
 ) -> Result<(), tokio::io::Error>
 where
     R: AsyncReadExt + Unpin,
     W: AsyncWriteExt + Unpin,
 {
-    // 在整个函数里持有 writer_guard，这样 shutdown() 调用时不会被其他任务抢走
     let mut writer_guard = writer.lock().await;
-    //let mut buffer = vec![0; 8 * 1024]; // 8KB 缓冲区
-    let mut buffer = get_buf().await; // 8KB 缓冲区
+    let mut buffer = POOL.get_buffer().await;    // pool 中拿到的 BytesMut
 
     loop {
-        // 带超时的读取
-        let read_future = reader.read(&mut buffer);
-        let read_result = timeout(timeout_duration, read_future).await;
-
-        let n = match read_result {
+        // append 模式读取
+        let n = match timeout(timeout_duration, reader.read_buf(&mut buffer)).await {
             Ok(Ok(0)) => {
-                // EOF：对写端半关闭，让对端马上收到 FIN
                 let _ = writer_guard.shutdown().await;
                 break;
             }
             Ok(Ok(n)) => n,
-
             Ok(Err(e)) => {
                 eprintln!("{}：读取错误：{}", direction, e);
                 let _ = writer_guard.shutdown().await;
+                POOL.return_buffer(buffer).await;
                 return Err(e);
             }
-
             Err(_) => {
                 eprintln!("{}：读取超时", direction);
                 let _ = writer_guard.shutdown().await;
-                return Err(std::io::Error::new(ErrorKind::TimedOut, "读取超时"));
+                POOL.return_buffer(buffer).await;
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "读取超时"));
             }
         };
 
-        // 带超时的写入
-        let write_future = writer_guard.write_all(&buffer[..n]);
-        let write_result = timeout(timeout_duration, write_future).await;
-        match write_result {
-            Ok(Ok(_)) => {
-                // 写入成功，继续循环
-            }
-
-            Ok(Err(e)) => {
-                eprintln!("{}：写入错误：{}", direction, e);
-                let _ = writer_guard.shutdown().await;
-                return Err(e);
-            }
-
-            Err(_) => {
-                eprintln!("{}：写入超时", direction);
-                let _ = writer_guard.shutdown().await;
-                return Err(std::io::Error::new(ErrorKind::TimedOut, "写入超时"));
-            }
+        // 写出刚 append 的那 n 字节
+        if let Err(e) = writer_guard.write_all(&buffer[..n]).await {
+            eprintln!("{}：写入错误：{}", direction, e);
+            let _ = writer_guard.shutdown().await;
+            POOL.return_buffer(buffer).await;
+            return Err(e);
         }
+
+        buffer.clear();
     }
 
-    return_buf(buffer).await;
-    // 循环因 EOF 跳出，返回 Ok
+    // 用完还池子
+    POOL.return_buffer(buffer).await;
     Ok(())
 }

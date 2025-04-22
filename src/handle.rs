@@ -11,6 +11,7 @@ use bytes::{BufMut, BytesMut};
 use std::net::{Incoming, Ipv6Addr};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 
 fn build_socks_request(target_address: &str) -> Option<BytesMut> {
     use std::net::ToSocketAddrs;
@@ -224,7 +225,7 @@ pub async fn handle_conn(
               }
             };
 
-            let mut rng = StdRng::from_entropy();
+            /*let mut rng = StdRng::from_entropy();
             //let ip_list_lock = ip_list.lock().await;
             let target_host = match ip_list.choose(&mut rng) {
                 Some(host) => host,
@@ -234,7 +235,8 @@ pub async fn handle_conn(
                     let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
                     return Err(anyhow::Error::new(e));
                 }
-            };
+            };*/
+            let target_host = &ip_list[0];
 
             match TcpStream::connect(target_host).await {
                 Ok(mut proxy_stream) => {
@@ -319,22 +321,9 @@ pub async fn handle_conn(
                     }
 
                     // 6. 建立双向数据转发
-                    let (client_reader, client_writer) = tokio::io::split(stream);
-                    let (proxy_reader, proxy_writer) = tokio::io::split(proxy_stream);
-
-                    let proxy_writer = Arc::new(Mutex::new(proxy_writer));
-                    tokio::spawn({
-                        let proxy_writer = Arc::clone(&proxy_writer);
-                        async move {
-                            let _ = io_utils::handle_copy3(client_reader, proxy_writer, "客户端 -> 代理", Duration::from_secs(10)).await;
-                        }
-                    });
-
-                    let client_writer = Arc::new(Mutex::new(client_writer));
-                    tokio::spawn({
-                        let client_writer = Arc::clone(&client_writer);
-                        async move {
-                            let _ = io_utils::handle_copy3(proxy_reader, client_writer, "代理 -> 客户端", Duration::from_secs(10)).await;
+                    tokio::spawn(async move {
+                        if let Err(e) = tokio::time::timeout(Duration::from_secs(30), tokio::io::copy_bidirectional(&mut stream, &mut proxy_stream)).await {
+                            eprintln!("数据转发超时或失败: {}", e);
                         }
                     });
                 }
