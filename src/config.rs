@@ -1,8 +1,11 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use tokio::fs::File;
+//use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::io;
+use bytes::BytesMut;
+use tokio_rustls::rustls::{ServerConfig,Certificate, PrivateKey};
+use tokio::io::{AsyncReadExt, BufReader, AsyncBufReadExt};
 
 #[derive(Debug)]
 pub struct Config {
@@ -42,9 +45,9 @@ impl Config {
 
 }
 
-pub fn parse_file(file_path: &str) -> Result<Config, io::Error> {
+pub async fn parse_file(file_path: &str) -> Result<Config, io::Error> {
     let path = Path::new(file_path);
-    let file = match File::open(path) {
+    let file = match File::open(path).await {
         Ok(f) => f,
         Err(e) => {
             return Err(io::Error::new(io::ErrorKind::InvalidInput,
@@ -56,8 +59,9 @@ pub fn parse_file(file_path: &str) -> Result<Config, io::Error> {
     let mut config = Config::new();
     let mut current_section = String::new();
 
-    for line in reader.lines() {
-        let line = line?;
+    let mut lines = reader.lines();
+    while let Some(line) = lines.next_line().await? {
+        let line = line;
         let line = line.trim();
 
         if line.is_empty() || line.starts_with('#') {
@@ -95,5 +99,73 @@ pub fn parse_file(file_path: &str) -> Result<Config, io::Error> {
             .or_insert_with(HashMap::new)
             .insert(key.to_string(), value.to_string());
     }
+    Ok(config)
+}
+
+
+/*async fn check_connection(address: &str) -> bool {
+    match TcpStream::connect(address).await {
+        Ok(_) => true,  // 连接成功
+        Err(_) => false, // 连接失败
+    }
+}
+
+async fn update_ip_list(ip_port_list: Arc<Mutex<Vec<String>>>, all_ip_ports: Vec<String>) {
+    loop {
+        let mut updated_ips = vec![];
+
+        for ip in &all_ip_ports {
+            if check_connection(ip).await {
+                updated_ips.push(ip.clone());
+            }
+        }
+
+        {
+            // 更新共享的 IP 列表
+            let mut ip_list_lock = ip_port_list.lock().await;
+            *ip_list_lock = updated_ips;
+        }
+
+        // 等待 15 分钟
+        sleep(Duration::from_secs(15 * 60)).await;
+    }
+}*/
+
+/// 加载证书和私钥
+pub async fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerConfig, io::Error> {
+    // 读取 cert.pem 文件
+    let cert_file = tokio::fs::File::open(cert_path).await?;
+    let mut cert_reader = BufReader::new(cert_file);
+    let mut buf = BytesMut::with_capacity(4096); // Use BytesMut for buffer management
+    cert_reader.read_buf(&mut buf).await?;
+    let mut buf = buf.as_ref();
+
+    // 使用 BufReader 解析 PEM 数据
+    let certs = rustls_pemfile::certs(&mut buf)
+        .into_iter()
+        .map(|item| {
+            item.map(|i| Certificate(i.to_vec()))
+        })
+        .collect::<Result<Vec<Certificate>, _>>()?;
+
+    // 读取 key.pem 文件
+    let key_file = tokio::fs::File::open(key_path).await?;
+    let mut key_reader = BufReader::new(key_file);
+    let mut buf = BytesMut::with_capacity(4096); // Use BytesMut for buffer management
+    key_reader.read_buf(&mut buf).await?;
+    let mut buf = buf.as_ref();
+    let keys = rustls_pemfile::private_key(&mut buf)?;
+
+    if keys.is_none() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "未找到有效私钥"));
+    }
+
+    // 配置 TLS
+    let config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth() // 不要求客户端证书
+        .with_single_cert(certs, PrivateKey(keys.unwrap().secret_der().to_vec()))
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
+
     Ok(config)
 }

@@ -5,6 +5,28 @@ use std::io::ErrorKind;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use once_cell::sync::Lazy;
+
+/// 全局单例 pool
+static BUF_POOL: Lazy<Mutex<Vec<BytesMut>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// 获取一个 buffer
+async fn get_buf() -> BytesMut {
+    let mut pool = BUF_POOL.lock().await;
+    pool.pop().unwrap_or_else(|| BytesMut::with_capacity(8 * 1024))
+}
+
+/// 用完后归还
+async fn return_buf(mut buf: BytesMut) {
+    buf.clear(); // 保留 capacity
+    let mut pool = BUF_POOL.lock().await;
+    if pool.len() < 1000 {
+        pool.push(buf);
+    } else {
+        pool.shrink_to_fit();
+    }
+}
+
 pub async fn read_buf_timeout<R: AsyncRead + Unpin>(
     stream: &mut R,
     buf: &mut BytesMut,
@@ -140,7 +162,8 @@ where
 {
     // 在整个函数里持有 writer_guard，这样 shutdown() 调用时不会被其他任务抢走
     let mut writer_guard = writer.lock().await;
-    let mut buffer = vec![0; 8 * 1024]; // 8KB 缓冲区
+    //let mut buffer = vec![0; 8 * 1024]; // 8KB 缓冲区
+    let mut buffer = get_buf().await; // 8KB 缓冲区
 
     loop {
         // 带超时的读取
@@ -190,6 +213,7 @@ where
         }
     }
 
+    return_buf(buffer).await;
     // 循环因 EOF 跳出，返回 Ok
     Ok(())
 }
