@@ -5,6 +5,8 @@ use std::io::ErrorKind;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::buffer_pool::POOL;
+
 pub async fn read_buf_timeout<R: AsyncRead + Unpin>(
     stream: &mut R,
     buf: &mut BytesMut,
@@ -125,5 +127,56 @@ where
             }
         }
     }
+    Ok(())
+}
+
+pub async fn handle_copy3<R, W>(
+    mut reader: R,
+    writer: Arc<Mutex<W>>,
+    direction: &str,
+    timeout_duration: Duration,
+) -> Result<(), tokio::io::Error>
+where
+    R: AsyncReadExt + Unpin,
+    W: AsyncWriteExt + Unpin,
+{
+    let mut writer_guard = writer.lock().await;
+    let mut buffer = POOL.get_buffer().await;    // pool 中拿到的 BytesMut
+
+    loop {
+        // append 模式读取
+        let n = match timeout(timeout_duration, reader.read_buf(&mut buffer)).await {
+            Ok(Ok(0)) => {
+                let _ = writer_guard.shutdown().await;
+                break;
+            }
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => {
+                eprintln!("{}：读取错误：{}", direction, e);
+                let _ = writer_guard.shutdown().await;
+                POOL.return_buffer(buffer).await;
+                return Err(e);
+            }
+            Err(_) => {
+                eprintln!("{}：读取超时", direction);
+                let _ = writer_guard.shutdown().await;
+                POOL.return_buffer(buffer).await;
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "读取超时"));
+            }
+        };
+
+        // 写出刚 append 的那 n 字节
+        if let Err(e) = writer_guard.write_all(&buffer[..n]).await {
+            eprintln!("{}：写入错误：{}", direction, e);
+            let _ = writer_guard.shutdown().await;
+            POOL.return_buffer(buffer).await;
+            return Err(e);
+        }
+
+        buffer.clear();
+    }
+
+    // 用完还池子
+    POOL.return_buffer(buffer).await;
     Ok(())
 }
