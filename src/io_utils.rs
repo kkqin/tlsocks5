@@ -4,6 +4,7 @@ use bytes::BytesMut;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use std::io;
 
 use crate::buffer_pool::POOL;
 
@@ -179,4 +180,33 @@ where
     // 用完还池子
     POOL.return_buffer(buffer).await;
     Ok(())
+}
+
+/// 从 reader 读数据，经 writer 写出：
+/// 如果超过 `idle` 没读到任何字节，就返回 Err(io::ErrorKind::TimedOut)
+pub async fn pump_with_idle_timeout<R, W>(
+    mut reader: R,
+    mut writer: W,
+    idle: Duration
+) -> io::Result<()>
+where
+    R: AsyncReadExt + Unpin,
+    W: AsyncWriteExt + Unpin,
+{
+    let mut buf = [0u8; 8 * 1024];
+    loop {
+        // 等待读操作，但最多等 idle 时长
+        let n = match timeout(idle, reader.read(&mut buf)).await {
+            Ok(Ok(0)) => return Ok(()),                     // 对端 EOF，正常结束
+            Ok(Ok(n))   => n,                                // 读到 n 字节，继续
+            Ok(Err(e))  => return Err(e),                    // IO 错误
+            Err(_)      => {
+                // 超过 idle 时间都没读到数据
+                return Err(io::Error::new(io::ErrorKind::TimedOut,
+                                          "idle timeout"));
+            }
+        };
+        // 把读到的数据写给对端
+        writer.write_all(&buf[..n]).await?;
+    }
 }
