@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
 
         tokio::spawn(async move {
             let _ = tlssocks5::handle::handle_conn(
-                acceptor, stream, timeout, auth_passwords, ip_list
+                &acceptor, stream, timeout, &auth_passwords, &ip_list
             ).await;
 
             drop(permit); // 显式释放 permit

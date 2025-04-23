@@ -44,11 +44,11 @@ fn build_socks_request(target_address: &str) -> Option<BytesMut> {
 
 
 pub async fn handle_conn(
-    acceptor: TlsAcceptor,
+    acceptor: &TlsAcceptor,
     stream: tokio::net::TcpStream,
     timeout: Duration,
-    auth_passwords :Vec<String>,
-    ip_list: Vec<String>
+    auth_passwords :&Vec<String>,
+    ip_list: &Vec<String>
 ) -> anyhow::Result<()> {
 
     match acceptor.accept(stream).await {
@@ -107,11 +107,18 @@ pub async fn handle_conn(
             if reply[1] == 0x02 {
                 let mut buffer = BytesMut::with_capacity(1024);
                 if let Err(_) = io_utils::read_buf_timeout(&mut stream, &mut buffer, timeout).await {
-                    stream.shutdown().await.unwrap_or_default();
+                    stream.shutdown().await.ok();
                     let e_str = format!("write reply error: {}", "timeout read");
                     let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
                     return Err(anyhow::Error::new(e));
                 }
+
+                // 检查是否超限
+                if buffer.len() > 1024 {
+                    stream.shutdown().await.ok();
+                    return Err(anyhow::anyhow!("Authentication packet too large"));
+                }
+
                 let len = match buffer.get(1) {
                     Some(len) => *len,
                     None => {
