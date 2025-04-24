@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
         .map(|(ip, port)| format!("{}:{}", ip, port))
         .collect();
 
-    let ip_list = target_hosts.clone();
+    let ip_list = Arc::new(target_hosts.clone());
     /*let ip_list_clone = ip_list.clone();
     tokio::spawn(async move {
         update_ip_list(ip_list_clone, target_hosts).await;
@@ -73,13 +73,13 @@ async fn main() -> anyhow::Result<()> {
         let (stream, _) = listener.accept().await?;
         let acceptor = acceptor.clone();
         let auth_passwords = auth_passwords.clone();
-        let ip_list = ip_list.clone();
+        let ip_list = Arc::clone(&ip_list);
 
         let permit = sem.clone().acquire_owned().await.unwrap(); // 限制并发连接数
 
         tokio::spawn(async move {
             let _ = tlssocks5::handle::handle_conn(
-                acceptor, stream, timeout, auth_passwords, ip_list
+                &acceptor, stream, timeout, &auth_passwords, &ip_list
             ).await;
 
             drop(permit); // 显式释放 permit

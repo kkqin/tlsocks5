@@ -1,17 +1,11 @@
 use std::time::Duration;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio_rustls::TlsAcceptor;
 //use anyhow::{Error, Result};
 use tokio::io::AsyncWriteExt; // Import the trait for shutdown
 use crate::io_utils;
-use rand::seq::SliceRandom;
-use rand::rngs::StdRng;
-use rand::SeedableRng;
 use bytes::{BufMut, BytesMut};
-use std::net::{Incoming, Ipv6Addr};
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::time::timeout;
+use std::net::Ipv6Addr;
 
 fn build_socks_request(target_address: &str) -> Option<BytesMut> {
     use std::net::ToSocketAddrs;
@@ -44,11 +38,11 @@ fn build_socks_request(target_address: &str) -> Option<BytesMut> {
 
 
 pub async fn handle_conn(
-    acceptor: TlsAcceptor,
+    acceptor: &TlsAcceptor,
     stream: tokio::net::TcpStream,
     timeout: Duration,
-    auth_passwords :Vec<String>,
-    ip_list: Vec<String>
+    auth_passwords :&Vec<String>,
+    ip_list: &Vec<String>
 ) -> anyhow::Result<()> {
 
     match acceptor.accept(stream).await {
@@ -57,7 +51,7 @@ pub async fn handle_conn(
 
             let mut buf = [0; 2];
             if let Err(_) = io_utils::read_exact_timeout(&mut stream, &mut buf, timeout).await {
-                stream.shutdown().await.unwrap_or_default();
+                stream.shutdown().await.ok();
                 let e = std::io::Error::new(std::io::ErrorKind::Other, "Timeout not specified");
                 return Err(anyhow::Error::new(e));
             }
@@ -80,6 +74,10 @@ pub async fn handle_conn(
 
             // len
             let l =  buf[1];
+            if l as usize > 255 {
+                stream.shutdown().await.unwrap_or_default();
+                return Err(anyhow::anyhow!("Invalid method buffer length"));
+            }
             let mut methodbuf = vec![0u8;l as usize];
             if let Err(_) = io_utils::read_exact_timeout(&mut stream, &mut methodbuf, timeout).await {
               stream.shutdown().await.unwrap_or_default();
@@ -107,11 +105,18 @@ pub async fn handle_conn(
             if reply[1] == 0x02 {
                 let mut buffer = BytesMut::with_capacity(1024);
                 if let Err(_) = io_utils::read_buf_timeout(&mut stream, &mut buffer, timeout).await {
-                    stream.shutdown().await.unwrap_or_default();
+                    stream.shutdown().await.ok();
                     let e_str = format!("write reply error: {}", "timeout read");
                     let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
                     return Err(anyhow::Error::new(e));
                 }
+
+                // 检查是否超限
+                if buffer.len() > 1024 {
+                    stream.shutdown().await.ok();
+                    return Err(anyhow::anyhow!("Authentication packet too large"));
+                }
+
                 let len = match buffer.get(1) {
                     Some(len) => *len,
                     None => {
@@ -225,17 +230,6 @@ pub async fn handle_conn(
               }
             };
 
-            /*let mut rng = StdRng::from_entropy();
-            //let ip_list_lock = ip_list.lock().await;
-            let target_host = match ip_list.choose(&mut rng) {
-                Some(host) => host,
-                None => {
-                    let _ = stream.shutdown();
-                    let e_str = format!("未找到目標主機");
-                    let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
-                    return Err(anyhow::Error::new(e));
-                }
-            };*/
             let target_host = &ip_list[0];
 
             match TcpStream::connect(target_host).await {
@@ -321,11 +315,25 @@ pub async fn handle_conn(
                     }
 
                     // 6. 建立双向数据转发
+                    let (ri, wi) = tokio::io::split(stream);
+                    let (rp, wp) = tokio::io::split(proxy_stream);
                     tokio::spawn(async move {
-                        if let Err(e) = tokio::time::timeout(Duration::from_secs(30), tokio::io::copy_bidirectional(&mut stream, &mut proxy_stream)).await {
-                            eprintln!("数据转发超时或失败: {}", e);
+                        let idle = Duration::from_secs(30);
+                        let a = io_utils::pump_with_idle_timeout(ri, wp, idle);
+                        let b = io_utils::pump_with_idle_timeout(rp, wi, idle);
+
+                         // select! 一旦有一邊結束（正常 EOF、IO 錯誤或閒置逾時），就結束整個任務
+                         tokio::select! {
+                            res = a => {
+                                eprintln!("{:?}客戶端→伺服器 通道結束: {:?}", target_address, res);
+                            }
+                            res = b => {
+                                eprintln!("{:?}伺服器→客戶端 通道結束: {:?}", target_address, res);
+                            }
                         }
+                        // async block 結束，所有流都會被 drop，連線自動關閉
                     });
+
                 }
                 Err(e) => {
                     eprintln!("連接目標 SOCKS 服務失敗: {}", e);
