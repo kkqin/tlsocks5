@@ -44,15 +44,18 @@ pub async fn handle_conn(
     auth_passwords :&Vec<String>,
     ip_list: &Vec<String>
 ) -> anyhow::Result<()> {
-
-    match acceptor.accept(stream).await {
-        Ok(mut stream) => {
+    // ✅ TLS 握手设置超时
+    match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {
+        Ok(Err(e)) => {
+            eprintln!("TLS 握手錯誤: {:?}", e);
+            return Err(e.into());
+        }
+        Ok(Ok(mut stream)) => {
             println!("接受到新的 TLS 連線");
 
             let mut buf = [0; 2];
-            if let Err(_) = io_utils::read_exact_timeout(&mut stream, &mut buf, timeout).await {
+            if let Err(e) = io_utils::read_exact_timeout(&mut stream, &mut buf, timeout).await {
                 stream.shutdown().await.ok();
-                let e = std::io::Error::new(std::io::ErrorKind::Other, "Timeout not specified");
                 return Err(anyhow::Error::new(e));
             }
 
@@ -104,10 +107,8 @@ pub async fn handle_conn(
             // 如果需要使用者名稱/密碼認證
             if reply[1] == 0x02 {
                 let mut buffer = BytesMut::with_capacity(1024);
-                if let Err(_) = io_utils::read_buf_timeout(&mut stream, &mut buffer, timeout).await {
+                if let Err(e) = io_utils::read_buf_timeout(&mut stream, &mut buffer, timeout).await {
                     stream.shutdown().await.ok();
-                    let e_str = format!("write reply error: {}", "timeout read");
-                    let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
                     return Err(anyhow::Error::new(e));
                 }
 
@@ -174,9 +175,9 @@ pub async fn handle_conn(
             }
 
             let mut reqbuf = [0; 4];
-            if let Err(_) = io_utils::read_exact_timeout(&mut stream, &mut reqbuf, timeout).await {
+            if let Err(e) = io_utils::read_exact_timeout(&mut stream, &mut reqbuf, timeout).await {
                 stream.shutdown().await.unwrap_or_default();
-                let e_str = format!("error read");
+                let e_str = format!("error read {}", e);
                 let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
                 return Err(anyhow::Error::new(e));
             }
@@ -348,7 +349,8 @@ pub async fn handle_conn(
             }
         },
         Err(e) => {
-            eprintln!("TLS 握手失敗: {}", e);
+            eprint!("TLS 握手超時: {}", e);
+            return Err(anyhow::anyhow!("TLS 握手超時"));
         }
     };
     Ok(())
