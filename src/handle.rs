@@ -44,9 +44,13 @@ pub async fn handle_conn(
     auth_passwords :&Vec<String>,
     ip_list: &Vec<String>
 ) -> anyhow::Result<()> {
-
-    match acceptor.accept(stream).await {
-        Ok(mut stream) => {
+    // ✅ TLS 握手设置超时
+    match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {
+        Ok(Err(e)) => {
+            eprintln!("TLS 握手錯誤: {:?}", e);
+            return Err(e.into());
+        }
+        Ok(Ok(mut stream)) => {
             println!("接受到新的 TLS 連線");
 
             let mut buf = [0; 2];
@@ -348,7 +352,8 @@ pub async fn handle_conn(
             }
         },
         Err(e) => {
-            eprintln!("TLS 握手失敗: {}", e);
+            eprint!("TLS 握手超時: {}", e);
+            return Err(anyhow::anyhow!("TLS 握手超時"));
         }
     };
     Ok(())
