@@ -48,13 +48,13 @@ async fn main() -> anyhow::Result<()> {
         .map(|(ip, port)| format!("{}:{}", ip, port))
         .collect();
 
-    let ip_list = target_hosts.clone();
+    let ip_list = Arc::new(target_hosts.clone());
     /*let ip_list_clone = ip_list.clone();
     tokio::spawn(async move {
         update_ip_list(ip_list_clone, target_hosts).await;
     });*/
 
-    let auth_passwords = config.get_str_list("auth", "auth_passwords").unwrap_or_default();
+    let auth_passwords = Arc::new(config.get_str_list("auth", "auth_passwords").unwrap_or_default());
 
     let listener = match TcpListener::bind(&host).await{
         Ok(t) => t,
@@ -72,8 +72,8 @@ async fn main() -> anyhow::Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
         let acceptor = acceptor.clone();
-        let auth_passwords = auth_passwords.clone();
-        let ip_list = ip_list.clone();
+        let auth_passwords = Arc::clone(&auth_passwords);
+        let ip_list = Arc::clone(&ip_list);
 
         let permit = sem.clone().acquire_owned().await.unwrap(); // 限制并发连接数
 
