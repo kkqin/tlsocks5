@@ -44,18 +44,19 @@ pub async fn handle_conn(
     auth_passwords :&Vec<String>,
     ip_list: &Vec<String>
 ) -> anyhow::Result<()> {
-
-    match acceptor.accept(stream).await {
-        Ok(mut stream) => {
+        // ✅ TLS 握手设置超时
+    match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {
+        Ok(Err(e)) => {
+            eprintln!("TLS 握手錯誤: {:?}", e);
+            return Err(e.into());
+        }
+        Ok(Ok(mut stream)) => {
             println!("接受到新的 TLS 連線");
-
             let mut buf = [0; 2];
-            if let Err(_) = io_utils::read_exact_timeout(&mut stream, &mut buf, timeout).await {
+            if let Err(e) = io_utils::read_exact_timeout(&mut stream, &mut buf, timeout).await {
                 stream.shutdown().await.ok();
-                let e = std::io::Error::new(std::io::ErrorKind::Other, "Timeout not specified");
                 return Err(anyhow::Error::new(e));
             }
-
             //Socks5 v5
             let v = match buf.get(0) {
                 Some(v) => *v,
