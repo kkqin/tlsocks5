@@ -44,18 +44,15 @@ pub async fn handle_conn(
     auth_passwords :&Vec<String>,
     ip_list: &Vec<String>
 ) -> anyhow::Result<()> {
-    // ✅ TLS 握手设置超时
-    match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {
-        Ok(Err(e)) => {
-            eprintln!("TLS 握手錯誤: {:?}", e);
-            return Err(e.into());
-        }
-        Ok(Ok(mut stream)) => {
+
+    match acceptor.accept(stream).await {
+        Ok(mut stream) => {
             println!("接受到新的 TLS 連線");
 
             let mut buf = [0; 2];
-            if let Err(e) = io_utils::read_exact_timeout(&mut stream, &mut buf, timeout).await {
+            if let Err(_) = io_utils::read_exact_timeout(&mut stream, &mut buf, timeout).await {
                 stream.shutdown().await.ok();
+                let e = std::io::Error::new(std::io::ErrorKind::Other, "Timeout not specified");
                 return Err(anyhow::Error::new(e));
             }
 
@@ -316,25 +313,11 @@ pub async fn handle_conn(
                     }
 
                     // 6. 建立双向数据转发
-                    let (ri, wi) = tokio::io::split(stream);
-                    let (rp, wp) = tokio::io::split(proxy_stream);
                     tokio::spawn(async move {
-                        let idle = Duration::from_secs(30);
-                        let a = io_utils::pump_with_idle_timeout(ri, wp, idle);
-                        let b = io_utils::pump_with_idle_timeout(rp, wi, idle);
-
-                         // select! 一旦有一邊結束（正常 EOF、IO 錯誤或閒置逾時），就結束整個任務
-                         tokio::select! {
-                            res = a => {
-                                eprintln!("{:?}客戶端→伺服器 通道結束: {:?}", target_address, res);
-                            }
-                            res = b => {
-                                eprintln!("{:?}伺服器→客戶端 通道結束: {:?}", target_address, res);
-                            }
+                        if let Err(e) = tokio::time::timeout(timeout, tokio::io::copy_bidirectional(&mut stream, &mut proxy_stream)).await {
+                            eprintln!("數據轉發超時或失敗: {}", e);
                         }
-                        // async block 結束，所有流都會被 drop，連線自動關閉
                     });
-
                 }
                 Err(e) => {
                     eprintln!("連接目標 SOCKS 服務失敗: {}", e);
@@ -349,7 +332,7 @@ pub async fn handle_conn(
             }
         },
         Err(e) => {
-            eprint!("TLS 握手超時: {}", e);
+            eprintln!("TLS 握手超時: {}", e);
             return Err(anyhow::anyhow!("TLS 握手超時"));
         }
     };
