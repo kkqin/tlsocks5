@@ -1,0 +1,20 @@
+# .github/dependabot.yml
+
+version: 2
+updates:
+  - package-ecosystem: "cargo" # 指定 Rust 的包管理器
+    directory: "/"              # 指定 Cargo.toml 所在的目录（通常是仓库根目录）
+    schedule:
+      interval: "weekly"        # 每周检查一次更新 (可选值：daily, weekly, monthly)
+      day: "monday"             # 每周一检查 (可选值：sunday, monday, ..., saturday)
+      time: "09:00"             # 在上午 9:00 (UTC) 检查
+      timezone: "Asia/Shanghai" # 指定时区，更符合你的需求 (UTC 偏移量也可以)
+
+    target-branch: "main"       # Dependabot 将 PR 提交到这个分支
+    open-pull-requests-limit: 10 # 同时打开的 PR 数量限制
+    labels:                     # 为 Dependabot 创建的 PR 添加标签
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "feat"            # PR 提交信息的前缀
+      include: "scope"          # 在提交信息中包含范围
