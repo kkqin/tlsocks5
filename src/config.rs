@@ -84,8 +84,8 @@ pub async fn parse_file(file_path: &str) -> Result<Config, io::Error> {
                 eprintln!("配置文件格式錯誤：缺少 key");
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "配置格式错误：key".to_string()),
-                );
+                    "配置格式错误：key".to_string(),
+                ));
             }
         };
 
@@ -95,8 +95,8 @@ pub async fn parse_file(file_path: &str) -> Result<Config, io::Error> {
                 eprintln!("配置文件格式錯誤：缺少 value");
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "配置格式错误：value".to_string()),
-                );
+                    "配置格式错误：value".to_string(),
+                ));
             }
         };
 

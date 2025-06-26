@@ -79,8 +79,7 @@ pub async fn handle_conn(
                 return Err(anyhow::anyhow!("Invalid method buffer length"));
             }
             let mut methodbuf = vec![0u8; l as usize];
-            if (io_utils::read_exact_timeout(&mut stream, &mut methodbuf, timeout).await).is_err()
-            {
+            if (io_utils::read_exact_timeout(&mut stream, &mut methodbuf, timeout).await).is_err() {
                 stream.shutdown().await.unwrap_or_default();
                 let e_str = format!("is not socks5: {}, now shutdwon", buf[0]);
                 let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
