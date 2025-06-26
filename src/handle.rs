@@ -40,8 +40,8 @@ pub async fn handle_conn(
     acceptor: &TlsAcceptor,
     stream: tokio::net::TcpStream,
     timeout: Duration,
-    auth_passwords: &Vec<String>,
-    ip_list: &Vec<String>,
+    auth_passwords: &[String],
+    ip_list: &[String],
 ) -> anyhow::Result<()> {
     // ✅ TLS 握手设置超时
     match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {
@@ -57,7 +57,7 @@ pub async fn handle_conn(
                 return Err(anyhow::Error::new(e));
             }
             //Socks5 v5
-            let v = match buf.get(0) {
+            let v = match buf.first() {
                 Some(v) => *v,
                 None => {
                     stream.shutdown().await.unwrap_or_default();
@@ -79,7 +79,7 @@ pub async fn handle_conn(
                 return Err(anyhow::anyhow!("Invalid method buffer length"));
             }
             let mut methodbuf = vec![0u8; l as usize];
-            if let Err(_) = io_utils::read_exact_timeout(&mut stream, &mut methodbuf, timeout).await
+            if (io_utils::read_exact_timeout(&mut stream, &mut methodbuf, timeout).await).is_err()
             {
                 stream.shutdown().await.unwrap_or_default();
                 let e_str = format!("is not socks5: {}, now shutdwon", buf[0]);
@@ -121,7 +121,7 @@ pub async fn handle_conn(
                     Some(len) => *len,
                     None => {
                         stream.shutdown().await.unwrap_or_default();
-                        let e_str = format!("讀取長度失敗");
+                        let e_str = "讀取長度失敗".to_string();
                         let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
                         return Err(anyhow::Error::new(e));
                     }
@@ -169,7 +169,7 @@ pub async fn handle_conn(
                     return Err(anyhow::Error::new(e));
                 }
                 stream.shutdown().await.unwrap_or_default();
-                let e_str = format!("非socks認證");
+                let e_str = "非socks認證".to_string();
                 let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
                 return Err(anyhow::Error::new(e));
             }
@@ -184,7 +184,7 @@ pub async fn handle_conn(
 
             if reqbuf[0] != 0x05 {
                 stream.shutdown().await.unwrap_or_default();
-                let e_str = format!("not socks5 protocol!");
+                let e_str = "not socks5 protocol!".to_string();
                 let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
                 return Err(anyhow::Error::new(e));
             }
@@ -242,7 +242,7 @@ pub async fn handle_conn(
                     if let Err(e) = stream.shutdown().await {
                         eprintln!("shutdown error: {}", e); // 处理 shutdown 错误
                     }
-                    let e_str = format!("atyp error!");
+                    let e_str = "atyp error!".to_string();
                     let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
                     return Err(anyhow::Error::new(e));
                 }
@@ -293,7 +293,7 @@ pub async fn handle_conn(
                         None => {
                             let _ = stream.shutdown();
                             let _ = proxy_stream.shutdown();
-                            let e_str = format!("構建 SOCKS 請求失敗");
+                            let e_str = "構建 SOCKS 請求失敗".to_string();
                             let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
                             return Err(anyhow::Error::new(e));
                         }

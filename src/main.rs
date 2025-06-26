@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let timeout = Duration::from_secs(timeout as u64);
-    let host = "0.0.0.0".to_string() + &":".to_string() + &port;
+    let host = "0.0.0.0".to_string() + ":" + &port;
     let connect_ips: Vec<String> = config
         .get_str_list("trans", "connect_ips") // 从配置文件中读取多个IP
         .unwrap_or_default();

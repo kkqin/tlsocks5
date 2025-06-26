@@ -64,7 +64,6 @@ pub async fn parse_file(file_path: &str) -> Result<Config, io::Error> {
 
     let mut lines = reader.lines();
     while let Some(line) = lines.next_line().await? {
-        let line = line;
         let line = line.trim();
 
         if line.is_empty() || line.starts_with('#') {
@@ -83,8 +82,8 @@ pub async fn parse_file(file_path: &str) -> Result<Config, io::Error> {
                 eprintln!("配置文件格式錯誤：缺少 key");
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("配置格式错误：key"),
-                ));
+                    "配置格式错误：key".to_string()),
+                );
             }
         };
 
@@ -94,15 +93,15 @@ pub async fn parse_file(file_path: &str) -> Result<Config, io::Error> {
                 eprintln!("配置文件格式錯誤：缺少 value");
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("配置格式错误：value"),
-                ));
+                    "配置格式错误：value".to_string()),
+                );
             }
         };
 
         config
             .values_
             .entry(current_section.clone())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(key.to_string(), value.to_string());
     }
     Ok(config)
@@ -147,7 +146,6 @@ pub async fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerCo
 
     // 使用 BufReader 解析 PEM 数据
     let certs = rustls_pemfile::certs(&mut buf)
-        .into_iter()
         .map(|item| item.map(|i| Certificate(i.to_vec())))
         .collect::<Result<Vec<Certificate>, _>>()?;
 
