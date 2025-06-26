@@ -1,8 +1,7 @@
-use std::{collections::VecDeque, sync::Arc};
 use bytes::BytesMut;
-use tokio::sync::Mutex;
 use std::sync::LazyLock;
-
+use std::{collections::VecDeque, sync::Arc};
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct BufferPool {
@@ -24,7 +23,8 @@ impl BufferPool {
 
     pub async fn get_buffer(&self) -> BytesMut {
         let mut pool = self.pool.lock().await;
-        pool.pop_front().unwrap_or_else(|| BytesMut::with_capacity(self.buffer_size))
+        pool.pop_front()
+            .unwrap_or_else(|| BytesMut::with_capacity(self.buffer_size))
     }
 
     pub async fn return_buffer(&self, buffer: BytesMut) {
@@ -37,11 +37,13 @@ impl BufferPool {
     pub async fn get_buffer_with_size(&self, size: usize) -> BytesMut {
         let mut pool = self.pool.lock().await;
         if size <= self.buffer_size {
-            pool.pop_front().unwrap_or_else(|| BytesMut::with_capacity(self.buffer_size))
+            pool.pop_front()
+                .unwrap_or_else(|| BytesMut::with_capacity(self.buffer_size))
         } else {
             BytesMut::with_capacity(size)
         }
     }
 }
 
-pub static POOL: LazyLock<crate::buffer_pool::BufferPool> = LazyLock::new(|| crate::buffer_pool::BufferPool::new(8 * 1024, 1000));
+pub static POOL: LazyLock<crate::buffer_pool::BufferPool> =
+    LazyLock::new(|| crate::buffer_pool::BufferPool::new(8 * 1024, 1000));

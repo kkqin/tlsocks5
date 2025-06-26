@@ -1,10 +1,10 @@
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy};
-use tokio::time::{timeout, Duration};
 use bytes::BytesMut;
+use std::io;
 use std::io::ErrorKind;
 use std::sync::Arc;
+use tokio::io::{copy, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
-use std::io;
+use tokio::time::{timeout, Duration};
 
 use crate::buffer_pool::POOL;
 
@@ -21,7 +21,7 @@ pub async fn read_buf_timeout<R: AsyncRead + Unpin>(
                 return Err(std::io::Error::new(ErrorKind::UnexpectedEof, "读取到0字节"));
             }
             Ok(bytes_read)
-        }, // 直接回傳內部 Result<usize>
+        } // 直接回傳內部 Result<usize>
         Err(_) => Err(std::io::Error::new(ErrorKind::TimedOut, "讀取超時")),
     }
 }
@@ -49,7 +49,7 @@ pub async fn write_all_timeout<W: AsyncWrite + Unpin>(
     buf: &[u8],
     timeout_duration: Duration,
 ) -> Result<(), std::io::Error> {
-     match timeout(timeout_duration, stream.write_all(buf)).await {
+    match timeout(timeout_duration, stream.write_all(buf)).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => {
             eprintln!("寫入錯誤：{}", e);
@@ -62,7 +62,12 @@ pub async fn write_all_timeout<W: AsyncWrite + Unpin>(
     }
 }
 
-pub async fn handle_copy<R, W>(mut reader: R, writer: Arc<Mutex<W>>, direction: &str, timeout_duration: Duration) -> Result<(), tokio::io::Error>
+pub async fn handle_copy<R, W>(
+    mut reader: R,
+    writer: Arc<Mutex<W>>,
+    direction: &str,
+    timeout_duration: Duration,
+) -> Result<(), tokio::io::Error>
 where
     R: AsyncReadExt + Unpin,
     W: AsyncWriteExt + Unpin,
@@ -76,7 +81,7 @@ where
         }
         Ok(Err(e)) => {
             eprintln!("{}：复制出错：{}", direction, e);
-            let _ = writer_guard.shutdown().await;//使用guard调用shutdown
+            let _ = writer_guard.shutdown().await; //使用guard调用shutdown
             Err(e)
         }
         Err(_) => {
@@ -87,7 +92,12 @@ where
     }
 }
 
-pub async fn handle_copy2<R, W>(mut reader: R, writer: Arc<Mutex<W>>, direction: &str, timeout_duration: Duration) -> Result<(), tokio::io::Error>
+pub async fn handle_copy2<R, W>(
+    mut reader: R,
+    writer: Arc<Mutex<W>>,
+    direction: &str,
+    timeout_duration: Duration,
+) -> Result<(), tokio::io::Error>
 where
     R: AsyncReadExt + Unpin,
     W: AsyncWriteExt + Unpin,
@@ -97,9 +107,9 @@ where
     loop {
         let read_future = reader.read(&mut buffer);
         let read_result = timeout(timeout_duration, read_future).await;
-        let n = match read_result{
+        let n = match read_result {
             Ok(Ok(0)) => break, // EOF
-            Ok(Ok(n))=> n,
+            Ok(Ok(n)) => n,
             Ok(Err(e)) => {
                 eprintln!("{}：讀取錯誤：{}", direction, e);
                 let _ = writer_guard.shutdown().await;
@@ -142,7 +152,7 @@ where
     W: AsyncWriteExt + Unpin,
 {
     let mut writer_guard = writer.lock().await;
-    let mut buffer = POOL.get_buffer().await;    // pool 中拿到的 BytesMut
+    let mut buffer = POOL.get_buffer().await; // pool 中拿到的 BytesMut
 
     loop {
         // append 模式读取
@@ -162,7 +172,10 @@ where
                 eprintln!("{}：读取超时", direction);
                 let _ = writer_guard.shutdown().await;
                 POOL.return_buffer(buffer).await;
-                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "读取超时"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "读取超时",
+                ));
             }
         };
 
@@ -187,7 +200,7 @@ where
 pub async fn pump_with_idle_timeout<R, W>(
     mut reader: R,
     mut writer: W,
-    idle: Duration
+    idle: Duration,
 ) -> io::Result<()>
 where
     R: AsyncReadExt + Unpin,
@@ -197,13 +210,12 @@ where
     loop {
         // 等待读操作，但最多等 idle 时长
         let n = match timeout(idle, reader.read(&mut buf)).await {
-            Ok(Ok(0)) => return Ok(()),                     // 对端 EOF，正常结束
-            Ok(Ok(n))   => n,                                // 读到 n 字节，继续
-            Ok(Err(e))  => return Err(e),                    // IO 错误
-            Err(_)      => {
+            Ok(Ok(0)) => return Ok(()),  // 对端 EOF，正常结束
+            Ok(Ok(n)) => n,              // 读到 n 字节，继续
+            Ok(Err(e)) => return Err(e), // IO 错误
+            Err(_) => {
                 // 超过 idle 时间都没读到数据
-                return Err(io::Error::new(io::ErrorKind::TimedOut,
-                                          "idle timeout"));
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "idle timeout"));
             }
         };
         // 把读到的数据写给对端

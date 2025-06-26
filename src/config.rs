@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 use tokio::fs::File;
 //use std::io::{BufRead, BufReader};
-use std::path::Path;
-use std::io;
 use bytes::BytesMut;
-use tokio_rustls::rustls::{ServerConfig,Certificate, PrivateKey};
-use tokio::io::{AsyncReadExt, BufReader, AsyncBufReadExt};
+use std::io;
+use std::path::Path;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
 
 #[derive(Debug)]
 pub struct Config {
-    values_ : HashMap<String, HashMap<String,String>>,
+    values_: HashMap<String, HashMap<String, String>>,
 }
 
 impl Config {
@@ -20,7 +20,9 @@ impl Config {
     }
 
     fn get(&self, section: &str, key: &str) -> Option<&str> {
-        self.values_.get(section).and_then(|v| v.get(key).map(|v| v.as_str()))
+        self.values_
+            .get(section)
+            .and_then(|v| v.get(key).map(|v| v.as_str()))
     }
 
     pub fn has_section(&self, section: &str) -> bool {
@@ -40,9 +42,9 @@ impl Config {
     }
 
     pub fn get_str_list(&self, section: &str, key: &str) -> Option<Vec<String>> {
-        self.get(section, key).map(|v| v.split(',').map(|v| v.trim().to_string()).collect())
+        self.get(section, key)
+            .map(|v| v.split(',').map(|v| v.trim().to_string()).collect())
     }
-
 }
 
 pub async fn parse_file(file_path: &str) -> Result<Config, io::Error> {
@@ -50,8 +52,9 @@ pub async fn parse_file(file_path: &str) -> Result<Config, io::Error> {
     let file = match File::open(path).await {
         Ok(f) => f,
         Err(e) => {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                    format!("文件：{file_path}:{e}"),
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("文件：{file_path}:{e}"),
             ))
         }
     };
@@ -78,9 +81,10 @@ pub async fn parse_file(file_path: &str) -> Result<Config, io::Error> {
             Some(k) => k.trim(),
             None => {
                 eprintln!("配置文件格式錯誤：缺少 key");
-                return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
                     format!("配置格式错误：key"),
-                ))
+                ));
             }
         };
 
@@ -88,20 +92,21 @@ pub async fn parse_file(file_path: &str) -> Result<Config, io::Error> {
             Some(k) => k.trim(),
             None => {
                 eprintln!("配置文件格式錯誤：缺少 value");
-                return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
                     format!("配置格式错误：value"),
-                ))
+                ));
             }
         };
 
-        config.values_
+        config
+            .values_
             .entry(current_section.clone())
             .or_insert_with(HashMap::new)
             .insert(key.to_string(), value.to_string());
     }
     Ok(config)
 }
-
 
 /*async fn check_connection(address: &str) -> bool {
     match TcpStream::connect(address).await {
@@ -143,9 +148,7 @@ pub async fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerCo
     // 使用 BufReader 解析 PEM 数据
     let certs = rustls_pemfile::certs(&mut buf)
         .into_iter()
-        .map(|item| {
-            item.map(|i| Certificate(i.to_vec()))
-        })
+        .map(|item| item.map(|i| Certificate(i.to_vec())))
         .collect::<Result<Vec<Certificate>, _>>()?;
 
     // 读取 key.pem 文件
@@ -157,7 +160,10 @@ pub async fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerCo
     let keys = rustls_pemfile::private_key(&mut buf)?;
 
     if keys.is_none() {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "未找到有效私钥"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "未找到有效私钥",
+        ));
     }
 
     // 配置 TLS

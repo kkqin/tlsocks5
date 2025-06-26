@@ -1,6 +1,6 @@
 use tokio::net::TcpListener;
-use tokio_rustls::TlsAcceptor;
 use tokio::time::Duration;
+use tokio_rustls::TlsAcceptor;
 //use mimallocator::Mimalloc;
 use std::sync::Arc;
 mod config;
@@ -25,23 +25,27 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => {
             eprint!("Failed to parse config.ini: {}", e);
             return Err(anyhow::Error::new(e));
-        },
+        }
     };
 
-    let port = config.get_str("base", "listen_port").unwrap_or("1080".to_string());
+    let port = config
+        .get_str("base", "listen_port")
+        .unwrap_or("1080".to_string());
     let timeout = match config.get_int("base", "time_out") {
         Some(t) => t,
         None => {
             let e = std::io::Error::new(std::io::ErrorKind::Other, "Timeout not specified");
             return Err(anyhow::Error::new(e));
-        },
+        }
     };
     let timeout = Duration::from_secs(timeout as u64);
     let host = "0.0.0.0".to_string() + &":".to_string() + &port;
     let connect_ips: Vec<String> = config
         .get_str_list("trans", "connect_ips") // 从配置文件中读取多个IP
         .unwrap_or_default();
-    let connect_ports = config.get_str_list("trans", "connect_ports").unwrap_or_default();
+    let connect_ports = config
+        .get_str_list("trans", "connect_ports")
+        .unwrap_or_default();
     let target_hosts: Vec<String> = connect_ips
         .iter()
         .zip(connect_ports.iter())
@@ -54,9 +58,13 @@ async fn main() -> anyhow::Result<()> {
         update_ip_list(ip_list_clone, target_hosts).await;
     });*/
 
-    let auth_passwords = Arc::new(config.get_str_list("auth", "auth_passwords").unwrap_or_default());
+    let auth_passwords = Arc::new(
+        config
+            .get_str_list("auth", "auth_passwords")
+            .unwrap_or_default(),
+    );
 
-    let listener = match TcpListener::bind(&host).await{
+    let listener = match TcpListener::bind(&host).await {
         Ok(t) => t,
         Err(e) => {
             return Err(anyhow::Error::new(e));
@@ -79,9 +87,17 @@ async fn main() -> anyhow::Result<()> {
 
         tokio::spawn(async move {
             match tlssocks5::handle::handle_conn(
-                &acceptor, stream, timeout, &auth_passwords, &ip_list
-            ).await{
-                Ok(()) => {println!("優雅結束")},
+                &acceptor,
+                stream,
+                timeout,
+                &auth_passwords,
+                &ip_list,
+            )
+            .await
+            {
+                Ok(()) => {
+                    println!("優雅結束")
+                }
                 Err(e) => {
                     println!("{}", e)
                 }
