@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let timeout = match config.get_int("base", "time_out") {
         Some(t) => t,
         None => {
-            let e = std::io::Error::new(std::io::ErrorKind::Other, "Timeout not specified");
+            let e = std::io::Error::other("Timeout not specified");
             return Err(anyhow::Error::new(e));
         }
     };

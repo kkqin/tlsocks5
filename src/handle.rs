@@ -61,14 +61,14 @@ pub async fn handle_conn(
                 Some(v) => *v,
                 None => {
                     stream.shutdown().await.unwrap_or_default();
-                    let e = std::io::Error::new(std::io::ErrorKind::Other, "讀取版本失敗");
+                    let e = std::io::Error::other("讀取版本失敗");
                     return Err(anyhow::Error::new(e));
                 }
             };
             if v != 0x05 {
                 stream.shutdown().await.unwrap_or_default();
                 let e_str = format!("is not socks5: {}, now shutdwon", buf[0]);
-                let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                let e = std::io::Error::other(e_str);
                 return Err(anyhow::Error::new(e));
             }
 
@@ -82,7 +82,7 @@ pub async fn handle_conn(
             if (io_utils::read_exact_timeout(&mut stream, &mut methodbuf, timeout).await).is_err() {
                 stream.shutdown().await.unwrap_or_default();
                 let e_str = format!("is not socks5: {}, now shutdwon", buf[0]);
-                let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                let e = std::io::Error::other(e_str);
                 return Err(anyhow::Error::new(e));
             }
 
@@ -97,7 +97,7 @@ pub async fn handle_conn(
                 eprintln!();
                 stream.shutdown().await.unwrap_or_default();
                 let e_str = format!("write reply error: {}", e);
-                let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                let e = std::io::Error::other(e_str);
                 return Err(anyhow::Error::new(e));
             }
 
@@ -121,7 +121,7 @@ pub async fn handle_conn(
                     None => {
                         stream.shutdown().await.unwrap_or_default();
                         let e_str = "讀取長度失敗".to_string();
-                        let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                        let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
                 };
@@ -150,13 +150,13 @@ pub async fn handle_conn(
                 if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, timeout).await {
                     stream.shutdown().await.unwrap_or_default();
                     let e_str = format!("write reply error: {}", e);
-                    let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                    let e = std::io::Error::other(e_str);
                     return Err(anyhow::Error::new(e));
                 }
                 if !success {
                     stream.shutdown().await.unwrap_or_default();
                     let e_str = format!("認證失敗: {username}, {password}");
-                    let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                    let e = std::io::Error::other(e_str);
                     return Err(anyhow::Error::new(e));
                 }
             } else {
@@ -164,12 +164,12 @@ pub async fn handle_conn(
                 if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, timeout).await {
                     stream.shutdown().await.unwrap_or_default();
                     let e_str = format!("write reply error: {}", e);
-                    let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                    let e = std::io::Error::other(e_str);
                     return Err(anyhow::Error::new(e));
                 }
                 stream.shutdown().await.unwrap_or_default();
                 let e_str = "非socks認證".to_string();
-                let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                let e = std::io::Error::other(e_str);
                 return Err(anyhow::Error::new(e));
             }
 
@@ -177,14 +177,14 @@ pub async fn handle_conn(
             if let Err(e) = io_utils::read_exact_timeout(&mut stream, &mut reqbuf, timeout).await {
                 stream.shutdown().await.unwrap_or_default();
                 let e_str = format!("error read {}", e);
-                let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                let e = std::io::Error::other(e_str);
                 return Err(anyhow::Error::new(e));
             }
 
             if reqbuf[0] != 0x05 {
                 stream.shutdown().await.unwrap_or_default();
                 let e_str = "not socks5 protocol!".to_string();
-                let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                let e = std::io::Error::other(e_str);
                 return Err(anyhow::Error::new(e));
             }
             let _cmd = reqbuf[1];
@@ -242,7 +242,7 @@ pub async fn handle_conn(
                         eprintln!("shutdown error: {}", e); // 处理 shutdown 错误
                     }
                     let e_str = "atyp error!".to_string();
-                    let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                    let e = std::io::Error::other(e_str);
                     return Err(anyhow::Error::new(e));
                 }
             };
@@ -261,7 +261,7 @@ pub async fn handle_conn(
                         proxy_stream.shutdown().await.unwrap_or_default();
                         stream.shutdown().await.unwrap_or_default();
                         let e_str = format!("發送代理握手失敗: {}", e);
-                        let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                        let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
 
@@ -274,14 +274,14 @@ pub async fn handle_conn(
                         proxy_stream.shutdown().await.unwrap_or_default();
                         stream.shutdown().await.unwrap_or_default();
                         let e_str = format!("讀取代理握手回應失敗: {}", e);
-                        let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                        let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
                     if response[0] != 0x05 || response[1] != 0x00 {
                         proxy_stream.shutdown().await.unwrap_or_default();
                         stream.shutdown().await.unwrap_or_default();
                         let e_str = format!("代理握手失敗: {:?}", response);
-                        let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                        let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
 
@@ -293,7 +293,7 @@ pub async fn handle_conn(
                             stream.shutdown().await?;
                             proxy_stream.shutdown().await?;
                             let e_str = "構建 SOCKS 請求失敗".to_string();
-                            let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                            let e = std::io::Error::other(e_str);
                             return Err(anyhow::Error::new(e));
                         }
                         Some(request) => request,
@@ -309,7 +309,7 @@ pub async fn handle_conn(
                         proxy_stream.shutdown().await.unwrap_or_default();
                         stream.shutdown().await.unwrap_or_default();
                         let e_str = format!("發送目標位址請求失敗: {}", e);
-                        let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                        let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
 
@@ -325,14 +325,14 @@ pub async fn handle_conn(
                         proxy_stream.shutdown().await.unwrap_or_default();
                         stream.shutdown().await.unwrap_or_default();
                         let e_str = format!("讀取代理回應失敗: {}", e);
-                        let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                        let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
                     if request_response[1] != 0x00 {
                         proxy_stream.shutdown().await.unwrap_or_default();
                         stream.shutdown().await.unwrap_or_default();
                         let e_str = format!("代理連線目標失敗，錯誤代碼: {}", request_response[1]);
-                        let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                        let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
 
@@ -347,7 +347,7 @@ pub async fn handle_conn(
                         stream.shutdown().await.unwrap_or_default();
                         proxy_stream.shutdown().await.unwrap_or_default();
                         let e_str = format!("回覆用戶端 SOCKS 請求失敗: {}", e);
-                        let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
+                        let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
 
