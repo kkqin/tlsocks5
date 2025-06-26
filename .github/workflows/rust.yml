@@ -1,0 +1,46 @@
+# .github/workflows/rust.yml
+
+name: Rust CI
+
+# 当代码推送到 'main' 分支或创建/更新拉取请求时触发此工作流
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always # 让 Cargo 在日志中输出彩色信息
+
+jobs:
+  build_and_test: # 定义一个名为 'build_and_test' 的作业
+    runs-on: ubuntu-latest # 在最新的 Ubuntu 环境上运行此作业
+
+    steps: # 定义此作业中的步骤
+    - uses: actions/checkout@v4 # 第一个步骤：使用 checkout Action 检出仓库代码
+    - name: Install Rust toolchain # 第二个步骤：安装 Rust 工具链
+      uses: dtolnay/rust-toolchain@stable # 使用 rust-toolchain Action 安装 Rust stable 版本
+      with:
+        toolchain: stable # 可以指定 'stable', 'beta', 'nightly' 或特定版本 '1.70.0'
+
+    - name: Cache Cargo dependencies # 可选：缓存 Cargo 依赖，加速后续构建
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Run checks (fmt, clippy) # 运行代码格式检查和 Clippy 静态分析
+      run: |
+        cargo fmt --all --check
+        cargo clippy -- -D warnings # 将 Clippy 警告视为错误
+
+    - name: Build # 构建项目 (Release 模式)
+      run: cargo build --verbose --release
+
+    - name: Run tests # 运行所有测试
+      run: cargo test --verbose -- --nocapture
