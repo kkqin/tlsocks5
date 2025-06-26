@@ -5,9 +5,11 @@ name: Rust CI
 # 当代码推送到 'main' 分支或创建/更新拉取请求时触发此工作流
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - "**"
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - "**"
 
 env:
   CARGO_TERM_COLOR: always # 让 Cargo 在日志中输出彩色信息
