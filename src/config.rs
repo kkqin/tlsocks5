@@ -1,11 +1,9 @@
 use std::collections::HashMap;
-use tokio::fs::File;
-//use std::io::{BufRead, BufReader};
-use bytes::BytesMut;
 use std::io;
 use std::path::Path;
+use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
+use tokio_rustls::rustls::ServerConfig;
 
 #[derive(Debug)]
 pub struct Config {
@@ -139,39 +137,34 @@ async fn update_ip_list(ip_port_list: Arc<Mutex<Vec<String>>>, all_ip_ports: Vec
 
 /// 加载证书和私钥
 pub async fn load_tls_config(cert_path: &str, key_path: &str) -> Result<ServerConfig, io::Error> {
-    // 读取 cert.pem 文件
     let cert_file = tokio::fs::File::open(cert_path).await?;
     let mut cert_reader = BufReader::new(cert_file);
-    let mut buf = BytesMut::with_capacity(4096); // Use BytesMut for buffer management
-    cert_reader.read_buf(&mut buf).await?;
-    let mut buf = buf.as_ref();
-
-    // 使用 BufReader 解析 PEM 数据
+    let mut buf = Vec::new();
+    cert_reader.read_to_end(&mut buf).await?;
+    let mut buf = buf.as_slice();
     let certs = rustls_pemfile::certs(&mut buf)
-        .map(|item| item.map(|i| Certificate(i.to_vec())))
-        .collect::<Result<Vec<Certificate>, _>>()?;
+        .map(|x| x.unwrap())
+        .collect();
 
-    // 读取 key.pem 文件
     let key_file = tokio::fs::File::open(key_path).await?;
     let mut key_reader = BufReader::new(key_file);
-    let mut buf = BytesMut::with_capacity(4096); // Use BytesMut for buffer management
-    key_reader.read_buf(&mut buf).await?;
-    let mut buf = buf.as_ref();
-    let keys = rustls_pemfile::private_key(&mut buf)?;
+    let mut buf = Vec::new();
+    key_reader.read_to_end(&mut buf).await?;
+    let mut buf = buf.as_slice();
+    let keys = match rustls_pemfile::private_key(&mut buf)? {
+        Some(k) => k,
+        None => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "未找到有效私钥",
+            ));
+        }
+    };
 
-    if keys.is_none() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "未找到有效私钥",
-        ));
-    }
-
-    // 配置 TLS
     let config = ServerConfig::builder()
-        .with_safe_defaults()
-        .with_no_client_auth() // 不要求客户端证书
-        .with_single_cert(certs, PrivateKey(keys.unwrap().secret_der().to_vec()))
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
+        .with_no_client_auth()
+        .with_single_cert(certs, keys)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
 
     Ok(config)
 }
