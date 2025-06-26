@@ -25,6 +25,7 @@ impl Config {
             .and_then(|v| v.get(key).map(|v| v.as_str()))
     }
 
+    #[allow(dead_code)]
     pub fn has_section(&self, section: &str) -> bool {
         self.values_.contains_key(section)
     }
@@ -37,6 +38,7 @@ impl Config {
         self.get(section, key).map(|v| v.to_string())
     }
 
+    #[allow(dead_code)]
     pub fn get_bool(&self, section: &str, key: &str) -> Option<bool> {
         self.get(section, key).and_then(|v| v.parse().ok())
     }

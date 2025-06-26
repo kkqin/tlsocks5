@@ -291,8 +291,8 @@ pub async fn handle_conn(
                     // 3. 构建 SOCKS 请求，发送目标地址到代理
                     let target_request = match build_socks_request(&target_address) {
                         None => {
-                            let _ = stream.shutdown();
-                            let _ = proxy_stream.shutdown();
+                            stream.shutdown().await?;
+                            proxy_stream.shutdown().await?;
                             let e_str = "構建 SOCKS 請求失敗".to_string();
                             let e = std::io::Error::new(std::io::ErrorKind::Other, e_str);
                             return Err(anyhow::Error::new(e));
