@@ -46,7 +46,7 @@ pub async fn handle_conn(
     // ✅ TLS 握手设置超时
     match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {
         Ok(Err(e)) => {
-            eprintln!("TLS 握手錯誤: {:?}", e);
+            eprintln!("TLS 握手錯誤: {e:?}");
             return Err(e.into());
         }
         Ok(Ok(mut stream)) => {
@@ -96,7 +96,7 @@ pub async fn handle_conn(
             if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, timeout).await {
                 eprintln!();
                 stream.shutdown().await.unwrap_or_default();
-                let e_str = format!("write reply error: {}", e);
+                let e_str = format!("write reply error: {e}");
                 let e = std::io::Error::other(e_str);
                 return Err(anyhow::Error::new(e));
             }
@@ -149,7 +149,7 @@ pub async fn handle_conn(
                 }
                 if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, timeout).await {
                     stream.shutdown().await.unwrap_or_default();
-                    let e_str = format!("write reply error: {}", e);
+                    let e_str = format!("write reply error: {e}");
                     let e = std::io::Error::other(e_str);
                     return Err(anyhow::Error::new(e));
                 }
@@ -163,7 +163,7 @@ pub async fn handle_conn(
                 let reply = [0x00, 0x00];
                 if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, timeout).await {
                     stream.shutdown().await.unwrap_or_default();
-                    let e_str = format!("write reply error: {}", e);
+                    let e_str = format!("write reply error: {e}");
                     let e = std::io::Error::other(e_str);
                     return Err(anyhow::Error::new(e));
                 }
@@ -176,7 +176,7 @@ pub async fn handle_conn(
             let mut reqbuf = [0; 4];
             if let Err(e) = io_utils::read_exact_timeout(&mut stream, &mut reqbuf, timeout).await {
                 stream.shutdown().await.unwrap_or_default();
-                let e_str = format!("error read {}", e);
+                let e_str = format!("error read {e}");
                 let e = std::io::Error::other(e_str);
                 return Err(anyhow::Error::new(e));
             }
@@ -235,11 +235,11 @@ pub async fn handle_conn(
                     let port = u16::from_be_bytes(portbuf);
                     // Convert the addr array to an Ipv6Addr
                     let ip_address = Ipv6Addr::from(addr);
-                    format!("[{}]:{}", ip_address, port)
+                    format!("[{ip_address}]:{port}")
                 }
                 _ => {
                     if let Err(e) = stream.shutdown().await {
-                        eprintln!("shutdown error: {}", e); // 处理 shutdown 错误
+                        eprintln!("shutdown error: {e}"); // 处理 shutdown 错误
                     }
                     let e_str = "atyp error!".to_string();
                     let e = std::io::Error::other(e_str);
@@ -260,7 +260,7 @@ pub async fn handle_conn(
                     {
                         proxy_stream.shutdown().await.unwrap_or_default();
                         stream.shutdown().await.unwrap_or_default();
-                        let e_str = format!("發送代理握手失敗: {}", e);
+                        let e_str = format!("發送代理握手失敗: {e}");
                         let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
@@ -273,14 +273,14 @@ pub async fn handle_conn(
                     {
                         proxy_stream.shutdown().await.unwrap_or_default();
                         stream.shutdown().await.unwrap_or_default();
-                        let e_str = format!("讀取代理握手回應失敗: {}", e);
+                        let e_str = format!("讀取代理握手回應失敗: {e}");
                         let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
                     if response[0] != 0x05 || response[1] != 0x00 {
                         proxy_stream.shutdown().await.unwrap_or_default();
                         stream.shutdown().await.unwrap_or_default();
-                        let e_str = format!("代理握手失敗: {:?}", response);
+                        let e_str = format!("代理握手失敗: {response:?}");
                         let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
@@ -308,7 +308,7 @@ pub async fn handle_conn(
                     {
                         proxy_stream.shutdown().await.unwrap_or_default();
                         stream.shutdown().await.unwrap_or_default();
-                        let e_str = format!("發送目標位址請求失敗: {}", e);
+                        let e_str = format!("發送目標位址請求失敗: {e}");
                         let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
@@ -324,7 +324,7 @@ pub async fn handle_conn(
                     {
                         proxy_stream.shutdown().await.unwrap_or_default();
                         stream.shutdown().await.unwrap_or_default();
-                        let e_str = format!("讀取代理回應失敗: {}", e);
+                        let e_str = format!("讀取代理回應失敗: {e}");
                         let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
@@ -336,7 +336,7 @@ pub async fn handle_conn(
                         return Err(anyhow::Error::new(e));
                     }
 
-                    println!("代理成功連線目標: {}", target_address);
+                    println!("代理成功連線目標: {target_address}");
 
                     // 5. 回复 SOCKS 请求，表示客户端连接成功
                     let reply = [0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
@@ -346,7 +346,7 @@ pub async fn handle_conn(
                     {
                         stream.shutdown().await.unwrap_or_default();
                         proxy_stream.shutdown().await.unwrap_or_default();
-                        let e_str = format!("回覆用戶端 SOCKS 請求失敗: {}", e);
+                        let e_str = format!("回覆用戶端 SOCKS 請求失敗: {e}");
                         let e = std::io::Error::other(e_str);
                         return Err(anyhow::Error::new(e));
                     }
@@ -359,12 +359,12 @@ pub async fn handle_conn(
                         )
                         .await
                         {
-                            eprintln!("數據轉發超時或失敗: {}", e);
+                            eprintln!("數據轉發超時或失敗: {e}");
                         }
                     });
                 }
                 Err(e) => {
-                    eprintln!("連接目標 SOCKS 服務失敗: {}", e);
+                    eprintln!("連接目標 SOCKS 服務失敗: {e}");
 
                     // 连接失败时返回错误
                     let reply = [0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
@@ -372,14 +372,14 @@ pub async fn handle_conn(
                         io_utils::write_all_timeout(&mut stream, &reply, Duration::from_secs(5))
                             .await
                     {
-                        eprintln!("回覆用戶端錯誤失敗: {}", e);
+                        eprintln!("回覆用戶端錯誤失敗: {e}");
                     }
                     return Err(anyhow::Error::new(e)); // 👈 或 spawn 的任务就此退出！
                 }
             }
         }
         Err(e) => {
-            eprintln!("TLS 握手超時: {}", e);
+            eprintln!("TLS 握手超時: {e}");
             return Err(anyhow::anyhow!("TLS 握手超時"));
         }
     };

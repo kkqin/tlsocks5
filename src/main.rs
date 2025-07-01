@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
     let tls_config = match config::load_tls_config("cert.pem", "key.pem").await {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("Failed to load TLS config: {}", e);
+            eprintln!("Failed to load TLS config: {e}");
             return Err(anyhow::Error::new(e));
         }
     };
@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let config = match config::parse_file("config.ini").await {
         Ok(t) => t,
         Err(e) => {
-            eprint!("Failed to parse config.ini: {}", e);
+            eprint!("Failed to parse config.ini: {e}");
             return Err(anyhow::Error::new(e));
         }
     };
@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     let target_hosts: Vec<String> = connect_ips
         .iter()
         .zip(connect_ports.iter())
-        .map(|(ip, port)| format!("{}:{}", ip, port))
+        .map(|(ip, port)| format!("{ip}:{port}"))
         .collect();
 
     let ip_list = Arc::new(target_hosts.clone());
@@ -72,8 +72,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     println!("SOCKS5 伺服器已啟動，監聽 {host} (TLS)");
-    println!("SOCKS5 伺服器已啟動，目標 {:?}", ip_list);
-    println!("SOCKS5 伺服器已啟動，認證密碼 {:?}", auth_passwords);
+    println!("SOCKS5 伺服器已啟動，目標 {ip_list:?}");
+    println!("SOCKS5 伺服器已啟動，認證密碼 {auth_passwords:?}");
 
     let sem = Arc::new(tokio::sync::Semaphore::new(500)); // 最多同时处理100个连接
 
@@ -99,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
                     println!("優雅結束")
                 }
                 Err(e) => {
-                    println!("{}", e)
+                    println!("{e}")
                 }
             };
 
