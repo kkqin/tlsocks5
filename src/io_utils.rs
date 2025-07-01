@@ -33,12 +33,8 @@ pub async fn read_exact_timeout<R: AsyncRead + Unpin>(
 ) -> Result<(), std::io::Error> {
     match timeout(timeout_duration, stream.read_exact(buf)).await {
         Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => {
-            Err(e)
-        }
-        Err(_) => {
-            Err(std::io::Error::new(ErrorKind::TimedOut, "讀取超時"))
-        }
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(std::io::Error::new(ErrorKind::TimedOut, "讀取超時")),
     }
 }
 
@@ -49,12 +45,8 @@ pub async fn write_all_timeout<W: AsyncWrite + Unpin>(
 ) -> Result<(), std::io::Error> {
     match timeout(timeout_duration, stream.write_all(buf)).await {
         Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => {
-            Err(e)
-        }
-        Err(_) => {
-            Err(std::io::Error::new(ErrorKind::TimedOut, "寫入超時"))
-        }
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(std::io::Error::new(ErrorKind::TimedOut, "寫入超時")),
     }
 }
 
@@ -71,9 +63,7 @@ where
     let mut writer_guard = writer.lock().await;
 
     match timeout(timeout_duration, copy(&mut reader, &mut *writer_guard)).await {
-        Ok(Ok(_bytes)) => {
-            Ok(())
-        }
+        Ok(Ok(_bytes)) => Ok(()),
         Ok(Err(e)) => {
             let _ = writer_guard.shutdown().await; //使用guard调用shutdown
             Err(e)
