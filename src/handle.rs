@@ -126,17 +126,13 @@ pub async fn handle_conn(
                     }
                 };
                 let username = &buffer[2usize..2 + len as usize].to_vec();
-                let username = match String::from_utf8(username.to_vec()) {
-                    Ok(username) => username,
-                    Err(_) => String::from("使用 unwrap_or_else 的預設字串"),
-                };
+                let username = String::from_utf8(username.to_vec())
+                    .unwrap_or_else(|_| String::from("unknown"));
                 let len2 = buffer[(1 + 1 + len) as usize];
                 let password =
                     &buffer[(2 + len + 1) as usize..(2 + len + 1 + len2) as usize].to_vec();
-                let password = match String::from_utf8(password.to_vec()) {
-                    Ok(password) => password,
-                    Err(_) => String::from("badpassword"),
-                };
+                let password = String::from_utf8(password.to_vec())
+                    .unwrap_or_else(|_| String::from("badpassword"));
                 //print!("{username}, {password}\n");
 
                 let mut reply = [0x01, 0x00];
