@@ -1,14 +1,10 @@
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::time::Duration;
 use tokio_rustls::TlsAcceptor;
-//use mimallocator::Mimalloc;
-use std::sync::Arc;
 mod config;
 
-//#[global_allocator]
-//static GLOBAL: Mimalloc = Mimalloc;
-
-#[tokio::main]
+#[tokio::main(worker_threads = 2)]
 async fn main() -> anyhow::Result<()> {
     //console_subscriber::init();
     // 建立 TLS 設定
@@ -78,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
     let sem = Arc::new(tokio::sync::Semaphore::new(500)); // 最多同时处理100个连接
 
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, peer_addr) = listener.accept().await?;
         let acceptor = acceptor.clone();
         let auth_passwords = Arc::clone(&auth_passwords);
         let ip_list = Arc::clone(&ip_list);
@@ -87,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
 
         tokio::spawn(async move {
             match tlssocks5::handle::handle_conn(
+                peer_addr,
                 &acceptor,
                 stream,
                 timeout,
@@ -96,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
             .await
             {
                 Ok(()) => {
-                    println!("優雅結束")
+                    //println!("優雅結束")
                 }
                 Err(e) => {
                     println!("{e}")

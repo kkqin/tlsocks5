@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsAcceptor;
 //use anyhow::{Error, Result};
@@ -6,6 +6,7 @@ use crate::io_utils;
 use bytes::{BufMut, BytesMut};
 use std::net::Ipv6Addr;
 use tokio::io::AsyncWriteExt; // Import the trait for shutdown
+use tokio_io_timeout::TimeoutStream;
 
 fn build_socks_request(target_address: &str) -> Option<BytesMut> {
     use std::net::ToSocketAddrs;
@@ -19,11 +20,11 @@ fn build_socks_request(target_address: &str) -> Option<BytesMut> {
     if let Ok(mut addrs) = target_address.to_socket_addrs() {
         if let Some(addr) = addrs.next() {
             match addr {
-                std::net::SocketAddr::V4(v4) => {
+                SocketAddr::V4(v4) => {
                     buffer.put_u8(0x01); // IPv4 地址类型
                     buffer.put_slice(&v4.ip().octets());
                 }
-                std::net::SocketAddr::V6(v6) => {
+                SocketAddr::V6(v6) => {
                     buffer.put_u8(0x04); // IPv6 地址类型
                     buffer.put_slice(&v6.ip().octets());
                 }
@@ -37,6 +38,7 @@ fn build_socks_request(target_address: &str) -> Option<BytesMut> {
 }
 
 pub async fn handle_conn(
+    peer_addr: SocketAddr,
     acceptor: &TlsAcceptor,
     stream: tokio::net::TcpStream,
     timeout: Duration,
@@ -50,7 +52,7 @@ pub async fn handle_conn(
             return Err(e.into());
         }
         Ok(Ok(mut stream)) => {
-            println!("接受到新的 TLS 連線");
+            //println!("接受到新的 TLS 連線");
             let mut buf = [0; 2];
             if let Err(e) = io_utils::read_exact_timeout(&mut stream, &mut buf, timeout).await {
                 stream.shutdown().await.ok();
@@ -102,7 +104,7 @@ pub async fn handle_conn(
             }
 
             // 如果需要使用者名稱/密碼認證
-            if reply[1] == 0x02 {
+            let p: String = if reply[1] == 0x02 {
                 let mut buffer = BytesMut::with_capacity(1024);
                 if let Err(e) = io_utils::read_buf_timeout(&mut stream, &mut buffer, timeout).await
                 {
@@ -155,10 +157,11 @@ pub async fn handle_conn(
                 }
                 if !success {
                     stream.shutdown().await.unwrap_or_default();
-                    let e_str = format!("認證失敗: {username}, {password}");
+                    let e_str = format!("認證失敗: {username}, {password}, r:{peer_addr}");
                     let e = std::io::Error::other(e_str);
                     return Err(anyhow::Error::new(e));
                 }
+                password.clone()
             } else {
                 let reply = [0x00, 0x00];
                 if let Err(e) = io_utils::write_all_timeout(&mut stream, &reply, timeout).await {
@@ -171,7 +174,7 @@ pub async fn handle_conn(
                 let e_str = "非socks認證".to_string();
                 let e = std::io::Error::other(e_str);
                 return Err(anyhow::Error::new(e));
-            }
+            };
 
             let mut reqbuf = [0; 4];
             if let Err(e) = io_utils::read_exact_timeout(&mut stream, &mut reqbuf, timeout).await {
@@ -251,7 +254,7 @@ pub async fn handle_conn(
 
             match TcpStream::connect(target_host).await {
                 Ok(mut proxy_stream) => {
-                    println!("連接到目標代理 SOCKS 服務成功");
+                    //println!("連接到目標代理 SOCKS 服務成功");
 
                     // 1. 发送 SOCKS 握手
                     let handshake = [0x05, 0x01, 0x00]; // SOCKS5 + 支持的认证方法 (无认证)
@@ -285,7 +288,7 @@ pub async fn handle_conn(
                         return Err(anyhow::Error::new(e));
                     }
 
-                    println!("代理握手成功");
+                    //println!("代理握手成功");
 
                     // 3. 构建 SOCKS 请求，发送目标地址到代理
                     let target_request = match build_socks_request(&target_address) {
@@ -336,7 +339,7 @@ pub async fn handle_conn(
                         return Err(anyhow::Error::new(e));
                     }
 
-                    println!("代理成功連線目標: {target_address}");
+                    println!("->: {target_address} u:{p} r:{peer_addr}");
 
                     // 5. 回复 SOCKS 请求，表示客户端连接成功
                     let reply = [0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
@@ -351,28 +354,36 @@ pub async fn handle_conn(
                         return Err(anyhow::Error::new(e));
                     }
 
+                    let mut stream = TimeoutStream::new(stream);
+                    stream.set_read_timeout(Some(Duration::from_secs(30)));
+                    stream.set_write_timeout(Some(Duration::from_secs(30)));
+
+                    let mut proxy_stream = TimeoutStream::new(proxy_stream);
+                    proxy_stream.set_read_timeout(Some(Duration::from_secs(30)));
+                    proxy_stream.set_write_timeout(Some(Duration::from_secs(30)));
+
+                    let mut stream = Box::pin(stream);
+                    let mut proxy_stream = Box::pin(proxy_stream);
+
                     // 6. 建立双向数据转发
                     tokio::spawn(async move {
-                        if let Err(e) = tokio::time::timeout(
-                            timeout,
-                            tokio::io::copy_bidirectional(&mut stream, &mut proxy_stream),
-                        )
-                        .await
-                        {
-                            eprintln!("數據轉發超時或失敗: {e}");
+                        let result =
+                            tokio::io::copy_bidirectional(&mut stream, &mut proxy_stream).await;
+                        if let Err(e) = result {
+                            eprintln!("转发失败: {e}");
                         }
                     });
                 }
                 Err(e) => {
-                    eprintln!("連接目標 SOCKS 服務失敗: {e}");
+                    //eprintln!("連接目標 SOCKS 服務失敗: {e}");
 
                     // 连接失败时返回错误
                     let reply = [0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-                    if let Err(e) =
+                    if let Err(_e) =
                         io_utils::write_all_timeout(&mut stream, &reply, Duration::from_secs(5))
                             .await
                     {
-                        eprintln!("回覆用戶端錯誤失敗: {e}");
+                        //eprintln!("回覆用戶端錯誤失敗: {e}");
                     }
                     return Err(anyhow::Error::new(e)); // 👈 或 spawn 的任务就此退出！
                 }
