@@ -4,9 +4,9 @@ use tokio_rustls::TlsAcceptor;
 //use anyhow::{Error, Result};
 use crate::io_utils;
 use bytes::{BufMut, BytesMut};
+use socket2::{SockRef, TcpKeepalive};
 use std::net::Ipv6Addr;
 use tokio::io::AsyncWriteExt; // Import the trait for shutdown
-use tokio_io_timeout::TimeoutStream;
 
 fn build_socks_request(target_address: &str) -> Option<BytesMut> {
     use std::net::ToSocketAddrs;
@@ -37,14 +37,32 @@ fn build_socks_request(target_address: &str) -> Option<BytesMut> {
     None
 }
 
+fn enable_keepalive(stream: &TcpStream) {
+    // 60 秒没数据开始探测，每 15 秒一次，5 次无响应就由内核拆掉。大约 2 分钟能清掉死连接。
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(15))
+        .with_retries(5);
+    let sock = SockRef::from(stream);
+    if let Err(e) = sock.set_keepalive(true) {
+        eprintln!("开启 TCP keepalive 失败: {e}");
+        return;
+    }
+    if let Err(e) = sock.set_tcp_keepalive(&keepalive) {
+        eprintln!("设置 TCP keepalive 失败: {e}");
+    }
+}
+
 pub async fn handle_conn(
     peer_addr: SocketAddr,
     acceptor: &TlsAcceptor,
     stream: tokio::net::TcpStream,
     timeout: Duration,
+    idle: Duration,
     auth_passwords: &[String],
     ip_list: &[String],
 ) -> anyhow::Result<()> {
+    enable_keepalive(&stream);
     // ✅ TLS 握手设置超时
     match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {
         Ok(Err(e)) => {
@@ -248,8 +266,9 @@ pub async fn handle_conn(
 
             let target_host = &ip_list[0];
 
-            match TcpStream::connect(target_host).await {
-                Ok(mut proxy_stream) => {
+            match tokio::time::timeout(timeout, TcpStream::connect(target_host)).await {
+                Ok(Ok(mut proxy_stream)) => {
+                    enable_keepalive(&proxy_stream);
                     //println!("連接到目標代理 SOCKS 服務成功");
 
                     // 1. 发送 SOCKS 握手
@@ -350,27 +369,32 @@ pub async fn handle_conn(
                         return Err(anyhow::Error::new(e));
                     }
 
-                    let mut stream = TimeoutStream::new(stream);
-                    stream.set_read_timeout(Some(Duration::from_secs(30)));
-                    stream.set_write_timeout(Some(Duration::from_secs(30)));
-
-                    let mut proxy_stream = TimeoutStream::new(proxy_stream);
-                    proxy_stream.set_read_timeout(Some(Duration::from_secs(30)));
-                    proxy_stream.set_write_timeout(Some(Duration::from_secs(30)));
-
-                    let mut stream = Box::pin(stream);
-                    let mut proxy_stream = Box::pin(proxy_stream);
-
-                    // 6. 建立双向数据转发
-                    tokio::spawn(async move {
-                        let result =
-                            tokio::io::copy_bidirectional(&mut stream, &mut proxy_stream).await;
-                        if let Err(e) = result {
-                            eprintln!("转发失败: {e}");
+                    // 名额由调用方持有到这个 await 结束，所以这里不能再套一层 spawn。
+                    match io_utils::copy_bidirectional_idle(
+                        stream,
+                        proxy_stream,
+                        idle,
+                        Duration::from_secs(120),
+                    )
+                    .await
+                    {
+                        Ok(_) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                            eprintln!("连接结束 {peer_addr}: {e}");
                         }
-                    });
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::ConnectionReset
+                                    | std::io::ErrorKind::BrokenPipe
+                                    | std::io::ErrorKind::ConnectionAborted
+                                    | std::io::ErrorKind::UnexpectedEof
+                                    | std::io::ErrorKind::NotConnected
+                            ) => {}
+                        Err(e) => eprintln!("转发失败 {peer_addr}: {e}"),
+                    }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     //eprintln!("連接目標 SOCKS 服務失敗: {e}");
 
                     // 连接失败时返回错误
@@ -382,6 +406,13 @@ pub async fn handle_conn(
                         //eprintln!("回覆用戶端錯誤失敗: {e}");
                     }
                     return Err(anyhow::Error::new(e)); // 👈 或 spawn 的任务就此退出！
+                }
+                Err(_) => {
+                    let reply = [0x05, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+                    let _ =
+                        io_utils::write_all_timeout(&mut stream, &reply, Duration::from_secs(5))
+                            .await;
+                    return Err(anyhow::anyhow!("连接上游超时: {target_host}"));
                 }
             }
         }

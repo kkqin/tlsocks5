@@ -1,10 +1,15 @@
 use bytes::BytesMut;
 use std::io;
 use std::io::ErrorKind;
-use std::sync::Arc;
-use tokio::io::{copy, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::task::{Context, Poll};
+use std::time::Instant;
+use tokio::io::{copy, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
+use tokio_io_timeout::TimeoutStream;
 
 use crate::buffer_pool::POOL;
 
@@ -203,5 +208,198 @@ where
         };
         // 把读到的数据写给对端
         writer.write_all(&buf[..n]).await?;
+    }
+}
+
+/// 双向转发。
+///
+/// 空闲计时看的是整条隧道：任意一边读到或写出数据就重新计时。
+/// 只有两个方向都安静了 `idle` 这么久才断开，单向下载或上传不会被掐断。
+/// `idle` 为 0 时不因空闲断开。写操作卡住超过 `write_timeout` 仍会断开。
+pub async fn copy_bidirectional_idle<A, B>(
+    a: A,
+    b: B,
+    idle: Duration,
+    write_timeout: Duration,
+) -> io::Result<(u64, u64)>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+    B: AsyncRead + AsyncWrite + Unpin,
+{
+    let last = Arc::new(AtomicU64::new(mono_ms()));
+    let write_timeout = if write_timeout.is_zero() {
+        None
+    } else {
+        Some(write_timeout)
+    };
+
+    let mut a = TimeoutStream::new(Touch::new(a, Arc::clone(&last)));
+    let mut b = TimeoutStream::new(Touch::new(b, Arc::clone(&last)));
+    a.set_write_timeout(write_timeout);
+    b.set_write_timeout(write_timeout);
+    let mut a = Box::pin(a);
+    let mut b = Box::pin(b);
+
+    if idle.is_zero() {
+        return tokio::io::copy_bidirectional(&mut a, &mut b).await;
+    }
+
+    tokio::select! {
+        biased;
+        result = tokio::io::copy_bidirectional(&mut a, &mut b) => result,
+        err = wait_idle(&last, idle) => Err(err),
+    }
+}
+
+fn mono_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    let start = START.get_or_init(Instant::now);
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+async fn wait_idle(last: &AtomicU64, idle: Duration) -> io::Error {
+    let idle_ms = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX).max(1);
+    loop {
+        let elapsed = mono_ms().saturating_sub(last.load(Ordering::Relaxed));
+        if elapsed >= idle_ms {
+            return io::Error::new(ErrorKind::TimedOut, "空闲超时");
+        }
+        tokio::time::sleep(Duration::from_millis(idle_ms - elapsed)).await;
+    }
+}
+
+struct Touch<S> {
+    inner: S,
+    last: Arc<AtomicU64>,
+}
+
+impl<S> Touch<S> {
+    fn new(inner: S, last: Arc<AtomicU64>) -> Self {
+        Self { inner, last }
+    }
+
+    fn mark(&self) {
+        self.last.store(mono_ms(), Ordering::Relaxed);
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Touch<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let before = buf.filled().len();
+        let result = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if matches!(result, Poll::Ready(Ok(()))) && buf.filled().len() > before {
+            self.mark();
+        }
+        result
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Touch<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let result = Pin::new(&mut self.inner).poll_write(cx, buf);
+        if let Poll::Ready(Ok(n)) = result {
+            if n > 0 {
+                self.mark();
+            }
+        }
+        result
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::duplex;
+
+    #[tokio::test]
+    async fn silence_hits_idle_timeout() {
+        let (a, a_peer) = duplex(64);
+        let (b, b_peer) = duplex(64);
+        let started = Instant::now();
+        let err = copy_bidirectional_idle(
+            a_peer,
+            b_peer,
+            Duration::from_millis(200),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect_err("silent tunnel should idle out");
+        assert_eq!(err.kind(), ErrorKind::TimedOut);
+        assert!(err.to_string().contains("空闲"));
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        drop((a, b));
+    }
+
+    #[tokio::test]
+    async fn one_way_traffic_keeps_the_tunnel() {
+        let (mut src, src_peer) = duplex(1024);
+        let (mut dst, dst_peer) = duplex(1024);
+        let copy = tokio::spawn(async move {
+            copy_bidirectional_idle(
+                src_peer,
+                dst_peer,
+                Duration::from_millis(800),
+                Duration::from_secs(5),
+            )
+            .await
+        });
+
+        for i in 0..5u8 {
+            src.write_all(&[i]).await.unwrap();
+            let mut buf = [0u8; 1];
+            tokio::time::timeout(Duration::from_secs(1), dst.read_exact(&mut buf))
+                .await
+                .expect("read")
+                .unwrap();
+            assert_eq!(buf[0], i);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(!copy.is_finished(), "one-way transfer must not hit idle");
+
+        let joined = tokio::time::timeout(Duration::from_secs(3), copy)
+            .await
+            .expect("idle should fire after traffic stops");
+        let err = joined.unwrap().expect_err("idle");
+        assert!(err.to_string().contains("空闲"));
+        drop((src, dst));
+    }
+
+    #[tokio::test]
+    async fn stalled_write_times_out_while_buffer_is_full() {
+        let (mut src, src_peer) = duplex(64);
+        let (_dst, dst_peer) = duplex(1);
+        let copy = tokio::spawn(async move {
+            copy_bidirectional_idle(
+                src_peer,
+                dst_peer,
+                Duration::from_secs(30),
+                Duration::from_millis(300),
+            )
+            .await
+        });
+        src.write_all(&[1u8; 64]).await.unwrap();
+        let joined = tokio::time::timeout(Duration::from_secs(2), copy)
+            .await
+            .expect("write stall should not wait for the idle timeout");
+        let err = joined.unwrap().expect_err("write timeout");
+        assert_eq!(err.kind(), ErrorKind::TimedOut);
+        assert!(!err.to_string().contains("空闲"));
     }
 }
