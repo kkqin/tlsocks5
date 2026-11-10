@@ -72,16 +72,16 @@ fn canonical_ip(ip: IpAddr) -> IpAddr {
     }
 }
 
-/// 按进程能打开的文件数收缩隧道上限。每条隧道两个套接字，再留出监听和标准流。
+/// 按最坏的 UDP 隧道（两个控制连接、两个 UDP 套接字）预留描述符。
 pub fn clamp_max_connections(max_connections: usize) -> usize {
     let Some(limit) = nofile_limit() else {
         return max_connections.max(1);
     };
-    let budget = (limit as usize).saturating_sub(64) / 2;
+    let budget = (limit as usize).saturating_sub(64) / 4;
     let budget = budget.max(1);
     if max_connections > budget {
         eprintln!(
-            "nofile 上限是 {limit}，同时连接从 {max_connections} 降到 {budget}。每条隧道要 2 个描述符，请把 nofile 调高后再提高 max_connections"
+            "nofile 上限是 {limit}，同时连接从 {max_connections} 降到 {budget}。每条 UDP 隧道要 4 个描述符，请把 nofile 调高后再提高 max_connections"
         );
         budget
     } else {
@@ -89,6 +89,7 @@ pub fn clamp_max_connections(max_connections: usize) -> usize {
     }
 }
 
+#[cfg(unix)]
 fn nofile_limit() -> Option<u64> {
     let mut lim = libc::rlimit {
         rlim_cur: 0,
@@ -103,6 +104,11 @@ fn nofile_limit() -> Option<u64> {
         return None;
     }
     Some(lim.rlim_cur)
+}
+
+#[cfg(not(unix))]
+fn nofile_limit() -> Option<u64> {
+    None
 }
 
 #[cfg(test)]

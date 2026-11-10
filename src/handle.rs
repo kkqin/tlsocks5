@@ -62,6 +62,7 @@ pub async fn handle_conn(
     auth_passwords: &[String],
     ip_list: &[String],
 ) -> anyhow::Result<()> {
+    let local_addr = stream.local_addr()?;
     enable_keepalive(&stream);
     // ✅ TLS 握手设置超时
     match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {
@@ -204,7 +205,12 @@ pub async fn handle_conn(
                 let e = std::io::Error::other(e_str);
                 return Err(anyhow::Error::new(e));
             }
-            let _cmd = reqbuf[1];
+            let cmd = reqbuf[1];
+            if cmd != 0x01 && cmd != 0x03 {
+                io_utils::write_all_timeout(&mut stream, &[5, 7, 0, 1, 0, 0, 0, 0, 0, 0], timeout)
+                    .await?;
+                return Err(anyhow::anyhow!("Unsupported SOCKS command: {cmd}"));
+            }
             let atyp = reqbuf[3];
 
             let target_address = match atyp {
@@ -264,7 +270,20 @@ pub async fn handle_conn(
                 }
             };
 
-            let target_host = &ip_list[0];
+            let target_host = ip_list
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("No upstream configured"))?;
+            if cmd == 0x03 {
+                return crate::udp::associate(
+                    &mut stream,
+                    peer_addr,
+                    local_addr.ip(),
+                    target_host,
+                    timeout,
+                    idle,
+                )
+                .await;
+            }
 
             match tokio::time::timeout(timeout, TcpStream::connect(target_host)).await {
                 Ok(Ok(mut proxy_stream)) => {

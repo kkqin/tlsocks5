@@ -28,14 +28,16 @@ async fn main() -> anyhow::Result<()> {
         .get_str("base", "listen_port")
         .unwrap_or("1080".to_string());
     let timeout = match config.get_int("base", "time_out") {
-        Some(t) => t,
+        Some(t) if t > 0 => t,
+        Some(_) => return Err(anyhow::anyhow!("base.time_out 必须大于 0（秒）")),
         None => {
             let e = std::io::Error::other("Timeout not specified");
             return Err(anyhow::Error::new(e));
         }
     };
     let timeout = Duration::from_secs(timeout as u64);
-    let idle = Duration::from_secs(setting(&config, "idle_timeout", 1800));
+    // 未单独配置时，恢复使用 time_out 作为无业务数据的断开时间。
+    let idle = Duration::from_secs(setting(&config, "idle_timeout", timeout.as_secs()));
     let max_connections =
         tlssocks5::limit::clamp_max_connections(setting(&config, "max_connections", 400) as usize);
     let max_per_ip = setting(&config, "max_per_ip", 64) as usize;
